@@ -5,10 +5,10 @@ from googleapiclient.errors import HttpError
 from googleapiclient.discovery import Resource
 
 
-from tools.logger import AppLogger
-from tools.gmail.gmail_authenticator import GmailAuthenticator
-from tools.gmail.messages_client import MessagesClient as GmailMessagesClient
-from tools.gmail.user_client import UsersClient as GmailUsersClient
+from app.tools.logger import AppLogger
+from app.tools.gmail.gmail_authenticator import GmailAuthenticator
+from app.tools.gmail.messages_client import MessagesClient as GmailMessagesClient
+from app.tools.gmail.user_client import UsersClient as GmailUsersClient
 
 
 class GmailClientError(Exception):

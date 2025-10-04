@@ -8,7 +8,6 @@ class AppLogger:
     Supports different logging levels: DEBUG, INFO, WARNING, ERROR, CRITICAL.
     Logs are stored in 'newsletter_ai/data_log/' relative to the project root.
     """
-
     # Define allowed logging levels
     LogLevel = Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
@@ -20,7 +19,7 @@ class AppLogger:
         :param log_file: Name of the log file (e.g., 'application.log')
         """
         # Ensure the log directory exists
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs')
+        base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'logs')
         os.makedirs(base_dir, exist_ok=True)
 
         # Full path to the log file

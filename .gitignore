@@ -4,3 +4,4 @@ secrets/
 logs/*.log
 myvenv/
 venv/
+.env

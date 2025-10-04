@@ -5,10 +5,10 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 
 
+from tools import utils as Utils
 from tools.logger import AppLogger
 from tools.gmail.gmail_client import GmailClient
 from tools.gmail.gmail_authenticator import GmailAuthenticator
-from tools import utils as Utils
 
 
 def load_environment_variables(env_path: str = ".env") -> dict:
@@ -67,7 +67,7 @@ def load_environment_variables(env_path: str = ".env") -> dict:
 #         logger.error(error_message)
 
 
-def run_user_session(user_email: str, env_vars: Dict[str, Any], logger: AppLogger) -> None:
+def run_user_session(env_vars: Dict[str, Any], logger: AppLogger, user_email: str = None) -> None:
     """
     Authenticate a user, create Gmail service and run Gmail API operations.
 
@@ -82,22 +82,34 @@ def run_user_session(user_email: str, env_vars: Dict[str, Any], logger: AppLogge
         # Token path per user
         token_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens")
         os.makedirs(token_dir, exist_ok=True)
-        user_token_path = os.path.join(token_dir, f"{user_email.replace('@','_at_')}.json")
 
         # Authenticate user
         creds = authenticator.authenticate_user(
-            user_email=user_email,
+            user_email=user_email or "",
             scopes=env_vars["scopes"],
-            token_storage_path=user_token_path
+            token_storage_path=os.path.join(token_dir, "temp.json")
         )
 
+        
         # Create Gmail service and client
         gmail_service = authenticator.get_service_for_user(creds)
+
         gmail_client = GmailClient(gmail_service)
+
 
         # Example operation: get profile
         profile = gmail_client.get_profile()
-        logger.info(f"User {user_email} profile: {profile}")
+        google_email  = profile.get("emailAddress")
+        logger.info(f"------------------------------------------------------>> Authentication user fist time: {google_email}")
+        logger.info(f"\t-->> Profile: {profile}")
+        
+        user_token_path = os.path.join(token_dir, f"{google_email.replace('@','_at_')}.json")
+
+        if os.path.exists(user_token_path):
+            logger.info(f"Token already existed for {google_email}, using the existing one.")
+        else:
+            os.rename(os.path.join(token_dir, "temp.json"), user_token_path)
+            logger.info(f"Token stored in {user_token_path}")
 
     except Exception as e:
         _, _, exec_tb = sys.exc_info()
@@ -106,6 +118,42 @@ def run_user_session(user_email: str, env_vars: Dict[str, Any], logger: AppLogge
         error_message = f"User session failed for '{user_email}' in '{function_name}' at line {line_number}: {e}"
         logger.error(error_message)
         print(error_message)
+
+
+def create_gmail_service_from_credentials(credentials_data: dict, logger: AppLogger) -> Any:
+    """
+    Create Gmail service from OAuth credentials data.
+    
+    Args:
+        credentials_data (dict): OAuth credentials data from web session
+        logger (AppLogger): Logger instance
+        
+    Returns:
+        Gmail service object
+    """
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        
+        # Create credentials object
+        credentials = Credentials(
+            token=credentials_data['token'],
+            refresh_token=credentials_data['refresh_token'],
+            token_uri=credentials_data['token_uri'],
+            client_id=credentials_data['client_id'],
+            client_secret=credentials_data['client_secret'],
+            scopes=credentials_data['scopes']
+        )
+        
+        # Create Gmail service
+        gmail_service = build('gmail', 'v1', credentials=credentials)
+        
+        logger.info("Gmail service created successfully from web credentials")
+        return gmail_service
+        
+    except Exception as e:
+        logger.error(f"Failed to create Gmail service from credentials: {e}")
+        raise
 
 
 def main():
@@ -123,12 +171,12 @@ def main():
         env_vars = load_environment_variables(path_relative_env_from_app)
 
         # Prompt user for email
-        user_email = input("Enter your Gmail address: ").strip()
-        if not user_email:
-            raise ValueError("A valid Gmail address is required")
+        # user_email = input("Enter your Gmail address: ").strip()
+        # if not user_email:
+        #     raise ValueError("A valid Gmail address is required")
 
         # Run user session (auth + Gmail operations)
-        run_user_session(user_email, env_vars, logger)
+        run_user_session(env_vars, logger)
 
     except Exception as e:
         _, _, exec_tb = sys.exc_info()
