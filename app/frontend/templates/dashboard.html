@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Newsletters - Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: #4285f4;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .logout-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .logout-btn:hover {
+            background: #c0392b;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .welcome {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+
+        .welcome h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .welcome p {
+            color: #666;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #4285f4;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: #666;
+        }
+
+        .actions {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .actions h2 {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+
+        .action-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .action-btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 1rem;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1rem;
+        }
+
+        .action-btn:hover {
+            background: #3367d6;
+            transform: translateY(-2px);
+        }
+
+        .action-btn.secondary {
+            background: #6c757d;
+        }
+
+        .action-btn.secondary:hover {
+            background: #5a6268;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 2rem 0;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4285f4;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            color: #e74c3c;
+            background: #fdf2f2;
+            padding: 1rem;
+            border-radius: 5px;
+            margin: 1rem 0;
+            display: none;
+        }
+
+        .success {
+            color: #27ae60;
+            background: #f0f9f0;
+            padding: 1rem;
+            border-radius: 5px;
+            margin: 1rem 0;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">📧 Smart Newsletters</div>
+        <div class="user-info">
+            <div class="user-avatar">{{ user_name[0] if user_name else user_email[0] }}</div>
+            <span>{{ user_name or user_email }}</span>
+            <a href="/logout" class="logout-btn">Cerrar Sesión</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="welcome">
+            <h1>¡Bienvenido, {{ user_name or user_email }}!</h1>
+            <p>Tu cuenta de Gmail está conectada y lista para usar.</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number" id="total-emails">-</div>
+                <div class="stat-label">Emails Totales</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="newsletters">-</div>
+                <div class="stat-label">Newsletters</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="unread">-</div>
+                <div class="stat-label">No Leídos</div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <h2>Acciones Disponibles</h2>
+            <div class="action-buttons">
+                <button class="action-btn" onclick="loadGmailProfile()">
+                    📊 Ver Perfil Gmail
+                </button>
+                <button class="action-btn" onclick="loadGmailMessages()">
+                    📧 Ver Mensajes Recientes
+                </button>
+                <button class="action-btn secondary" onclick="analyzeNewsletters()">
+                    🔍 Analizar Newsletters
+                </button>
+                <button class="action-btn secondary" onclick="manageSubscriptions()">
+                    ⚙️ Gestionar Suscripciones
+                </button>
+            </div>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Cargando datos...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+        <div class="success" id="success"></div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('success').style.display = 'none';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function showError(message) {
+            document.getElementById('error').textContent = message;
+            document.getElementById('error').style.display = 'block';
+            hideLoading();
+        }
+
+        function showSuccess(message) {
+            document.getElementById('success').textContent = message;
+            document.getElementById('success').style.display = 'block';
+            hideLoading();
+        }
+
+        function loadGmailProfile() {
+            showLoading();
+            
+            fetch('/api/gmail/profile')
+                .then(response => response.json())
+                .then(data => {
+                    hideLoading();
+                    if (data.error) {
+                        showError('Error: ' + data.error);
+                    } else {
+                        showSuccess('Perfil cargado correctamente');
+                        displayProfile(data);
+                    }
+                })
+                .catch(error => {
+                    showError('Error al cargar el perfil: ' + error.message);
+                });
+        }
+
+        function loadGmailMessages() {
+            showLoading();
+            
+            fetch('/api/gmail/messages')
+                .then(response => response.json())
+                .then(data => {
+                    hideLoading();
+                    if (data.error) {
+                        showError('Error: ' + data.error);
+                    } else {
+                        showSuccess('Mensajes cargados correctamente');
+                        displayMessages(data.messages);
+                    }
+                })
+                .catch(error => {
+                    showError('Error al cargar los mensajes: ' + error.message);
+                });
+        }
+
+        function displayProfile(profile) {
+            const results = document.getElementById('results');
+            results.innerHTML = `
+                <div class="actions" style="margin-top: 2rem;">
+                    <h2>Información del Perfil Gmail</h2>
+                    <div style="background: #f8f9fa; padding: 1rem; border-radius: 5px; margin-top: 1rem;">
+                        <p><strong>Email:</strong> ${profile.emailAddress || 'N/A'}</p>
+                        <p><strong>Nombre:</strong> ${profile.name || 'N/A'}</p>
+                        <p><strong>Mensajes Totales:</strong> ${profile.messagesTotal || 'N/A'}</p>
+                        <p><strong>Hilos Totales:</strong> ${profile.threadsTotal || 'N/A'}</p>
+                        <p><strong>Historia ID:</strong> ${profile.historyId || 'N/A'}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function displayMessages(messages) {
+            const results = document.getElementById('results');
+            let html = `
+                <div class="actions" style="margin-top: 2rem;">
+                    <h2>Mensajes Recientes</h2>
+                    <div style="background: #f8f9fa; padding: 1rem; border-radius: 5px; margin-top: 1rem;">
+            `;
+            
+            if (messages.length === 0) {
+                html += '<p>No se encontraron mensajes.</p>';
+            } else {
+                messages.forEach((message, index) => {
+                    html += `<p><strong>Mensaje ${index + 1}:</strong> ${message.id}</p>`;
+                });
+            }
+            
+            html += `
+                    </div>
+                </div>
+            `;
+            
+            results.innerHTML = html;
+        }
+
+        function analyzeNewsletters() {
+            showError('Función de análisis de newsletters en desarrollo');
+        }
+
+        function manageSubscriptions() {
+            showError('Función de gestión de suscripciones en desarrollo');
+        }
+
+        // Load initial data
+        window.addEventListener('load', function() {
+            loadGmailProfile();
+        });
+    </script>
+</body>
+</html>
+
