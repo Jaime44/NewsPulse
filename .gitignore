@@ -1,7 +1,26 @@
+# Secrets and environment
+.env
+.env.*
+!.env.example
 secrets/
+app/tokens/
+
+# Python
 **/__pycache__/
 *.pyc
-logs/*.log
 myvenv/
 venv/
-.env
+
+# Logs
+logs/*.log
+
+# Databases
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
+
+# Generated content
+data/processed_emails/
+data/images/
