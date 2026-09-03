@@ -1,74 +1,43 @@
 import os
 import sys
-import json
 
 # Add the app directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from dotenv import load_dotenv
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 
 
 from app.tools import utils as Utils
 from app.tools.logger import AppLogger
+from app.config import AppConfig, read_secret_file
 from app.tools.gmail.gmail_client import GmailClient
-from app.tools.gmail.gmail_authenticator import GmailAuthenticator
 
-Utils.clear_files_in_directory()
     
 logger = AppLogger("web_app.log")
 logger.debug(f"START: ")
 
-def load_environment_variables(env_path: str = ".env") -> dict:
-    """Load and prepare environment variables from a .env file."""
-    logger.debug(f"Loading environment variables from {env_path}")
-    if not os.path.exists(env_path):
-        raise FileNotFoundError(f".env file not found at path: {env_path}")
-    
-    load_dotenv(dotenv_path=env_path)
-    
-    try:
-        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_WEB_APP")
-        scopes = os.getenv("SCOPES")
-        scopes = [s.strip() for s in scopes.split(",")] 
+settings = AppConfig.load()
 
-        if not creds_path or not scopes:
-            raise KeyError("One or more required environment variables are missing")
-        if not creds_path:
-            raise KeyError("GOOGLE_APPLICATION_CREDENTIALS_WEB_APP is missing")
-        return {
-            "creds_path": str(creds_path),
-            "scopes": scopes
-        }
-    except KeyError as e:
-        raise KeyError(f"Error loading environment variables: {e}")
+app = Flask(
+    __name__,
+    template_folder=os.path.join(
+        os.path.dirname(__file__),
+        "../frontend/templates",
+    ),
+)
 
-# Load environment variables
-try:
-    env_vars = load_environment_variables(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", ".env")
-    )
-    logger.info(f"Environment variables loaded: {env_vars}")
-except Exception as e:
-    _,_, exec_tb = sys.exc_info()
-    line_number = exec_tb.tb_lineno if exec_tb else 'unknown'
-    function_name = exec_tb.tb_frame.f_code.co_name if exec_tb else 'unknown'
-    logger.error(f"Failed in '{function_name}' at line '{line_number}' to load environment variables: : {e}")
-    env_vars = None
-    
-app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), '../frontend/templates'))
+app.config.update(
+    SESSION_COOKIE_NAME="newspulse_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
-secret_key_path = os.getenv("SECRET_KEY_PATH")
-if not secret_key_path:
-    raise KeyError("SECRET_KEY_FILE is missing")
-if not os.path.exists(secret_key_path):
-        raise FileNotFoundError(f".env file not found at path: {secret_key_path}")
-else:
-    app.secret_key = Utils.load_secret_key_from_file(secret_key_path)
+app.secret_key = read_secret_file(
+    settings.flask_secret_key_path
+)
 
 @app.route('/')
 def index():
@@ -78,25 +47,22 @@ def index():
 @app.route('/auth/google')
 def google_auth():
     """Initiate Google OAuth flow."""
-    if not env_vars:
-        return jsonify({"error": "Server configuration error"}), 500
     
     try:
-        logger.debug(f"SCOPE: {env_vars['scopes']}")
-
         # Create OAuth flow
         flow = Flow.from_client_secrets_file(
-            env_vars["creds_path"],
-            scopes=env_vars["scopes"]
+            str(settings.google_credentials_path),
+            scopes=list(settings.google_scopes),
         )
-        flow.redirect_uri = url_for('google_callback', _external=True)
+
+        flow.redirect_uri = settings.google_redirect_uri
         logger.debug(f"OAuth flow created with redirect URI: {flow.redirect_uri}")
         # Generate authorization URL
         authorization_url, state = flow.authorization_url(
-            access_type='offline',
-            include_granted_scopes='true'
+            access_type="offline",
+            prompt="consent",
         )
-        
+                
         # Store state in session
         session['oauth_state'] = state
         
@@ -109,8 +75,6 @@ def google_auth():
 @app.route('/auth/google/callback')
 def google_callback():
     """Handle Google OAuth callback."""
-    if not env_vars:
-        return jsonify({"error": "Server configuration error"}), 500
     
     try:
         # Get authorization code from callback
@@ -128,10 +92,11 @@ def google_callback():
                 
         # Create OAuth flow
         flow = Flow.from_client_secrets_file(
-            env_vars["creds_path"],
-            scopes=env_vars["scopes"]
+            str(settings.google_credentials_path),
+            scopes=list(settings.google_scopes),
         )
-        flow.redirect_uri = url_for('google_callback', _external=True)
+
+        flow.redirect_uri = settings.google_redirect_uri
         
         # Exchange code for credentials
         flow.fetch_token(code=code)
