@@ -1,28 +1,53 @@
+from __future__ import annotations
+
 import sqlite3
 
-DB_PATH = "data/processed_emails.db"
+from pathlib import Path
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS processed_emails (
-        email_id TEXT PRIMARY KEY,
-        sender TEXT,
-        subject TEXT,
-        date TIMESTAMP,
-        processed_at TIMESTAMP
-    )
-    """)
-    conn.commit()
-    conn.close()
 
-def mark_email_processed(email_id: str, sender: str, subject: str, date: str):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-    INSERT OR IGNORE INTO processed_emails (email_id, sender, subject, date, processed_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
-    """, (email_id, sender, subject, date))
-    conn.commit()
-    conn.close()
+class Database:
+    """Manage connections and schema initialization for NewsPulse."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def connect(self) -> sqlite3.Connection:
+        """Open a configured SQLite connection."""
+
+        connection = sqlite3.connect(
+            self.path,
+            timeout=5,
+        )
+
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+
+        return connection
+
+    def initialize(self) -> None:
+        """Create the local database and required tables."""
+
+        self.path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS oauth_credentials (
+                    id INTEGER PRIMARY KEY
+                        CHECK (id = 1),
+
+                    email TEXT NOT NULL,
+
+                    credentials_encrypted BLOB NOT NULL,
+
+                    revoked INTEGER NOT NULL DEFAULT 0
+                        CHECK (revoked IN (0, 1)),
+
+                    connected_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
