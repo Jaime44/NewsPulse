@@ -1,25 +1,48 @@
+import hmac
 import os
 import sys
 
-# Add the app directory to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+    )
+)
 
+from flask import (
+    Flask,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 
-
-from app.tools import utils as Utils
+from app.backend.bd.db import Database
+from app.backend.bd.oauth_store import (
+    OAuthCredentialStore,
+    StoredOAuthCredentials,
+)
 from app.tools.logger import AppLogger
 from app.config import AppConfig, read_secret_file
 from app.tools.gmail.gmail_client import GmailClient
 
-    
+
+  
 logger = AppLogger("web_app.log")
 logger.debug(f"START: ")
 
 settings = AppConfig.load()
+
+database = Database(settings.database_path)
+
+oauth_store = OAuthCredentialStore(
+    database=database,
+    encryption_key_path=settings.token_encryption_key_path,
+)
 
 app = Flask(
     __name__,
@@ -29,15 +52,38 @@ app = Flask(
     ),
 )
 
+is_production = (
+    settings.environment.strip().lower()
+    == "production"
+)
+
 app.config.update(
     SESSION_COOKIE_NAME="newspulse_session",
     SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=is_production,
     SESSION_COOKIE_SAMESITE="Lax",
 )
 
 app.secret_key = read_secret_file(
     settings.flask_secret_key_path
 )
+
+def get_authenticated_account(
+) -> StoredOAuthCredentials | None:
+    """Load the authenticated account from server-side storage."""
+
+    account_id = session.get("account_id")
+
+    if account_id != OAuthCredentialStore.ACCOUNT_ID:
+        return None
+
+    stored_account = oauth_store.load()
+
+    if stored_account is None or stored_account.revoked:
+        session.clear()
+        return None
+
+    return stored_account
 
 @app.route('/')
 def index():
@@ -79,16 +125,23 @@ def google_callback():
     try:
         # Get authorization code from callback
         code = request.args.get('code')
-        state = request.args.get('state')
+        state = request.args.get("state")
+        expected_state = session.pop("oauth_state", None)
         
         if not code:
             logger.error("Authorization code not received in callback")
             return jsonify({"error": "Authorization code not received"}), 400
         
         # Verify state
-        if state != session.get('oauth_state'):
+        if (
+            not state
+            or not expected_state
+            or not hmac.compare_digest(state, expected_state)
+        ):
             logger.error("Invalid state parameter in OAuth callback")
-            return jsonify({"error": "Invalid state parameter"}), 400
+            return jsonify(
+                {"error": "Invalid state parameter"}
+            ), 400
                 
         # Create OAuth flow
         flow = Flow.from_client_secrets_file(
@@ -102,25 +155,30 @@ def google_callback():
         flow.fetch_token(code=code)
         credentials = flow.credentials
         
-        # Store credentials in session (in production, store securely)
-        session['credentials'] = {
-            'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
-        }
-        
         # Create Gmail service and get user info
         gmail_service = build('gmail', 'v1', credentials=credentials)
         gmail_client = GmailClient(gmail_service)
+        
         profile = gmail_client.get_profile()
-        
-        session['user_email'] = profile.get('emailAddress')
-        session['user_name'] = profile.get('name', '')
-        
-        logger.info(f"User authenticated successfully: {session['user_email']}")
+
+        email = profile.get("emailAddress")
+
+        if not email:
+            raise RuntimeError(
+                "Google did not return the Gmail email address"
+            )
+
+        oauth_store.save(
+            email=email,
+            credentials=credentials,
+        )
+
+        session.clear()
+        session["account_id"] = OAuthCredentialStore.ACCOUNT_ID
+
+        logger.info(
+            "Google account authenticated successfully"
+        )
         
         return redirect(url_for('dashboard'))
         
@@ -130,81 +188,104 @@ def google_callback():
 
 @app.route('/dashboard')
 def dashboard():
-    """User dashboard after successful authentication."""
-    if 'user_email' not in session:
-        return redirect(url_for('index'))
-    
-    return render_template('dashboard.html', 
-                         user_email=session['user_email'],
-                         user_name=session.get('user_name', ''))
+    """Display the dashboard for the connected account."""
 
-@app.route('/api/gmail/profile')
-def get_gmail_profile():
-    """Get Gmail profile using stored credentials."""
-    if 'credentials' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
     try:
-        # Recreate credentials from session
-        creds_data = session['credentials']
-        credentials = Credentials(
-            token=creds_data['token'],
-            refresh_token=creds_data['refresh_token'],
-            token_uri=creds_data['token_uri'],
-            client_id=creds_data['client_id'],
-            client_secret=creds_data['client_secret'],
-            scopes=creds_data['scopes']
+        stored_account = get_authenticated_account()
+    except Exception:
+        logger.error(
+            "Stored OAuth credentials could not be loaded"
         )
-        
-        # Create Gmail service
-        gmail_service = build('gmail', 'v1', credentials=credentials)
+        session.clear()
+        return jsonify(
+            {"error": "Stored credentials are unavailable"}
+        ), 500
+
+    if stored_account is None:
+        return redirect(url_for("index"))
+
+    return render_template(
+        "dashboard.html",
+        user_email=stored_account.email,
+        user_name="",
+    )
+
+@app.route("/api/gmail/profile")
+def get_gmail_profile():
+    """Get the Gmail profile using server-side credentials."""
+
+    try:
+        stored_account = get_authenticated_account()
+
+        if stored_account is None:
+            return jsonify(
+                {"error": "Not authenticated"}
+            ), 401
+
+        gmail_service = build(
+            "gmail",
+            "v1",
+            credentials=stored_account.credentials,
+        )
+
         gmail_client = GmailClient(gmail_service)
         profile = gmail_client.get_profile()
-        
-        return jsonify(profile)
-        
-    except Exception as e:
-        logger.error(f"Failed to get Gmail profile: {e}")
-        return jsonify({"error": "Failed to retrieve profile"}), 500
 
-@app.route('/api/gmail/messages')
-def get_gmail_messages():
-    """Get Gmail messages using stored credentials."""
-    if 'credentials' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    try:
-        # Recreate credentials from session
-        creds_data = session['credentials']
-        credentials = Credentials(
-            token=creds_data['token'],
-            refresh_token=creds_data['refresh_token'],
-            token_uri=creds_data['token_uri'],
-            client_id=creds_data['client_id'],
-            client_secret=creds_data['client_secret'],
-            scopes=creds_data['scopes']
+        return jsonify(profile)
+
+    except Exception as exc:
+        logger.error(
+            f"Failed to get Gmail profile: "
+            f"{type(exc).__name__}"
         )
-        
-        # Create Gmail service
-        gmail_service = build('gmail', 'v1', credentials=credentials)
-        
-        # Get messages (example: last 10 messages)
-        results = gmail_service.users().messages().list(userId='me', maxResults=10).execute()
-        messages = results.get('messages', [])
-        
+        return jsonify(
+            {"error": "Failed to retrieve profile"}
+        ), 500
+
+@app.route("/api/gmail/messages")
+def get_gmail_messages():
+    """List Gmail messages using server-side credentials."""
+
+    try:
+        stored_account = get_authenticated_account()
+
+        if stored_account is None:
+            return jsonify(
+                {"error": "Not authenticated"}
+            ), 401
+
+        gmail_service = build(
+            "gmail",
+            "v1",
+            credentials=stored_account.credentials,
+        )
+
+        results = (
+            gmail_service
+            .users()
+            .messages()
+            .list(
+                userId="me",
+                maxResults=10,
+            )
+            .execute()
+        )
+
+        messages = results.get("messages", [])
+
         return jsonify({"messages": messages})
-        
-    except Exception as e:
-        logger.error(f"Failed to get Gmail messages: {e}")
-        return jsonify({"error": "Failed to retrieve messages"}), 500
+
+    except Exception as exc:
+        logger.error(
+            f"Failed to get Gmail messages: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {"error": "Failed to retrieve messages"}
+        ), 500
 
 @app.route('/logout')
 def logout():
     """Logout user and clear session."""
     session.clear()
     return redirect(url_for('index'))
-
-if __name__ == '__main__':
-    # Clear log files on startup
-    app.run(debug=True, host='0.0.0.0', port=5000)
-
