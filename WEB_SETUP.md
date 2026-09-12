@@ -1,4 +1,4 @@
-# Smart Newsletters - Web Application Setup
+# News Pulse - Web Application Setup
 
 ## Descripción
 
