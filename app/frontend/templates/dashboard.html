@@ -58,6 +58,7 @@
             border-radius: 5px;
             cursor: pointer;
             transition: background 0.3s ease;
+            font: inherit;
         }
 
         .logout-btn:hover {
@@ -201,7 +202,11 @@
         <div class="user-info">
             <div class="user-avatar">{{ user_name[0] if user_name else user_email[0] }}</div>
             <span>{{ user_name or user_email }}</span>
-            <a href="/logout" class="logout-btn">Cerrar Sesión</a>
+            <form action="{{ url_for('logout') }}" method="post">
+                <button type="submit" class="logout-btn">
+                    Cerrar sesión
+                </button>
+            </form>
         </div>
     </div>
 

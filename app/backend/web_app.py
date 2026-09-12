@@ -79,7 +79,14 @@ def get_authenticated_account(
 
     account_id = session.get("account_id")
 
+    if account_id is None:
+        return None
+
     if account_id != OAuthCredentialStore.ACCOUNT_ID:
+        logger.warning(
+            "Rejected invalid account identifier from session"
+        )
+        session.clear()
         return None
 
     stored_account = oauth_store.load()
@@ -138,9 +145,14 @@ def google_auth():
         
         return redirect(authorization_url)
         
-    except Exception as e:
-        logger.error(f"Google auth initiation failed: {e}")
-        return jsonify({"error": "Authentication failed"}), 500
+    except Exception as exc:
+        logger.error(
+            f"Google auth initiation failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {"error": "Authentication failed"}
+        ), 500
 
 @app.route('/auth/google/callback')
 def google_callback():
@@ -148,23 +160,59 @@ def google_callback():
     
     try:
         # Get authorization code from callback
-        code = request.args.get('code')
         state = request.args.get("state")
-        expected_state = session.pop("oauth_state", None)
-        
-        if not code:
-            logger.error("Authorization code not received in callback")
-            return jsonify({"error": "Authorization code not received"}), 400
-        
-        # Verify state
+        expected_state = session.pop(
+            "oauth_state",
+            None,
+        )
+
         if (
             not state
             or not expected_state
-            or not hmac.compare_digest(state, expected_state)
+            or not hmac.compare_digest(
+                state,
+                expected_state,
+            )
         ):
-            logger.error("Invalid state parameter in OAuth callback")
+            logger.error(
+                "Invalid state parameter in OAuth callback"
+            )
             return jsonify(
                 {"error": "Invalid state parameter"}
+            ), 400
+
+        oauth_error = request.args.get("error")
+
+        if oauth_error == "access_denied":
+            logger.warning(
+                "Google authorization was denied by the user"
+            )
+            return redirect(
+                url_for(
+                    "index",
+                    error="google_authorization_denied",
+                )
+            )
+
+        if oauth_error:
+            logger.error(
+                "Google returned an OAuth authorization error"
+            )
+            return redirect(
+                url_for(
+                    "index",
+                    error="google_authorization_failed",
+                )
+            )
+
+        code = request.args.get("code")
+
+        if not code:
+            logger.error(
+                "Authorization code not received in callback"
+            )
+            return jsonify(
+                {"error": "Authorization code not received"}
             ), 400
                 
         # Create OAuth flow
@@ -206,9 +254,14 @@ def google_callback():
         
         return redirect(url_for('dashboard'))
         
-    except Exception as e:
-        logger.error(f"Google callback failed: {e}")
-        return jsonify({"error": "Authentication callback failed"}), 500
+    except Exception as exc:
+        logger.error(
+            f"Google callback failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {"error": "Authentication callback failed"}
+        ), 500
 
 @app.route('/dashboard')
 def dashboard():
@@ -350,8 +403,12 @@ def get_gmail_messages():
             {"error": "Failed to retrieve messages"}
         ), 500
 
-@app.route('/logout')
+@app.post("/logout")
 def logout():
-    """Logout user and clear session."""
+    """Clear the browser session."""
+
     session.clear()
-    return redirect(url_for('index'))
+
+    return redirect(
+        url_for("index")
+    )
