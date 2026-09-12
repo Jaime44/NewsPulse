@@ -26,6 +26,11 @@ from app.backend.bd.oauth_store import (
     OAuthCredentialStore,
     StoredOAuthCredentials,
 )
+from app.backend.services.oauth_credentials import (
+    OAuthReauthenticationRequired,
+    OAuthRefreshTemporarilyUnavailable,
+    ensure_valid_credentials,
+)
 from app.tools.logger import AppLogger
 from app.config import AppConfig, read_secret_file
 from app.tools.gmail.gmail_client import GmailClient
@@ -84,6 +89,25 @@ def get_authenticated_account(
         return None
 
     return stored_account
+
+def get_authenticated_gmail_service():
+    """Build Gmail using valid server-side credentials."""
+
+    stored_account = get_authenticated_account()
+
+    if stored_account is None:
+        return None
+
+    credentials = ensure_valid_credentials(
+        account=stored_account,
+        store=oauth_store,
+    )
+
+    return build(
+        "gmail",
+        "v1",
+        credentials=credentials,
+    )
 
 @app.route('/')
 def index():
@@ -212,26 +236,47 @@ def dashboard():
 
 @app.route("/api/gmail/profile")
 def get_gmail_profile():
-    """Get the Gmail profile using server-side credentials."""
+    """Get the Gmail profile using valid server-side credentials."""
 
     try:
-        stored_account = get_authenticated_account()
+        gmail_service = get_authenticated_gmail_service()
 
-        if stored_account is None:
+        if gmail_service is None:
             return jsonify(
                 {"error": "Not authenticated"}
             ), 401
-
-        gmail_service = build(
-            "gmail",
-            "v1",
-            credentials=stored_account.credentials,
-        )
 
         gmail_client = GmailClient(gmail_service)
         profile = gmail_client.get_profile()
 
         return jsonify(profile)
+
+    except OAuthReauthenticationRequired:
+        session.clear()
+        logger.warning(
+            "Google authorization must be granted again"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Google authorization expired; "
+                    "authenticate again"
+                )
+            }
+        ), 401
+
+    except OAuthRefreshTemporarilyUnavailable:
+        logger.warning(
+            "Google credential refresh is temporarily unavailable"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Google authentication is "
+                    "temporarily unavailable"
+                )
+            }
+        ), 503
 
     except Exception as exc:
         logger.error(
@@ -244,21 +289,15 @@ def get_gmail_profile():
 
 @app.route("/api/gmail/messages")
 def get_gmail_messages():
-    """List Gmail messages using server-side credentials."""
+    """List Gmail messages using valid server-side credentials."""
 
     try:
-        stored_account = get_authenticated_account()
+        gmail_service = get_authenticated_gmail_service()
 
-        if stored_account is None:
+        if gmail_service is None:
             return jsonify(
                 {"error": "Not authenticated"}
             ), 401
-
-        gmail_service = build(
-            "gmail",
-            "v1",
-            credentials=stored_account.credentials,
-        )
 
         results = (
             gmail_service
@@ -274,6 +313,33 @@ def get_gmail_messages():
         messages = results.get("messages", [])
 
         return jsonify({"messages": messages})
+
+    except OAuthReauthenticationRequired:
+        session.clear()
+        logger.warning(
+            "Google authorization must be granted again"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Google authorization expired; "
+                    "authenticate again"
+                )
+            }
+        ), 401
+
+    except OAuthRefreshTemporarilyUnavailable:
+        logger.warning(
+            "Google credential refresh is temporarily unavailable"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Google authentication is "
+                    "temporarily unavailable"
+                )
+            }
+        ), 503
 
     except Exception as exc:
         logger.error(
