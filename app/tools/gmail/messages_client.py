@@ -5,8 +5,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.discovery import Resource
 
 
-from tools.logger import AppLogger
-from tools.gmail.gmail_authenticator import GmailAuthenticator
+from app.tools.logger import AppLogger
 
 
 class MessagesClientError(Exception):
@@ -20,16 +19,15 @@ class MessagesClient:
     perform operations such as listing, retrieving, sending,
     and deleting messages.
 
-    It depends on GmailAuthenticator to supply the authenticated
-    Gmail API service resource.
+    It depends on an authorized Gmail API service resource.
     """
 
-    def __init__(self, service: GmailAuthenticator) -> None:
+    def __init__(self, service: Resource) -> None:
         """
         Initialize the MessagesClient.
 
         Args:
-            gmail_authenticator (GmailAuthenticator): Authenticator providing a Gmail API service instance.
+            service (Resource): Authorized Gmail API service instance.
             logger (Optional[AppLogger]): Custom logger. Defaults to AppLogger if not provided.
         """
         self.service: Resource = service

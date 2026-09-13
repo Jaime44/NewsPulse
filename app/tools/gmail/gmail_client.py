@@ -6,7 +6,6 @@ from googleapiclient.discovery import Resource
 
 
 from app.tools.logger import AppLogger
-from app.tools.gmail.gmail_authenticator import GmailAuthenticator
 from app.tools.gmail.messages_client import MessagesClient as GmailMessagesClient
 from app.tools.gmail.user_client import UsersClient as GmailUsersClient
 
@@ -27,14 +26,13 @@ class GmailClient:
     a unified interface for Gmail operations.
     """
 
-    def __init__(self, gmail_authenticator: GmailAuthenticator) -> None:
+    def __init__(self, service: Resource) -> None:
         """
-        Initialize GmailClient with an authenticator.
+        Initialize GmailClient with an authorized Gmail API service.
 
         Args:
-            gmail_authenticator (GmailAuthenticator): Authenticator instance that provides Gmail API service.
+            service (Resource): Authorized Gmail API service instance.
         """
-        service: Resource = gmail_authenticator
         self.logger: AppLogger = AppLogger("gmail_client.log")
 
         # Sub-clients for Gmail resources

@@ -4,8 +4,7 @@ from typing import Any, Dict
 from googleapiclient.discovery import Resource
 
 
-from tools.logger import AppLogger
-from tools.gmail.gmail_authenticator import GmailAuthenticator
+from app.tools.logger import AppLogger
 
 
 class UsersClientError(Exception):
@@ -24,7 +23,7 @@ class UsersClient:
     and configure/watch for Gmail inbox changes.
     """
 
-    def __init__(self, service: GmailAuthenticator) -> None:
+    def __init__(self, service: Resource) -> None:
         """
         Initialize UsersClient with Gmail API service and optional logger.
 
