@@ -20,6 +20,10 @@ class GmailClientError(Exception):
     pass
 
 
+class GmailListingLimitReached(GmailClientError):
+    """Raised when more Gmail results remain after the limit."""
+
+
 @dataclass(frozen=True, slots=True)
 class GmailMessageReference:
     message_id: str
@@ -101,6 +105,7 @@ class GmailClient:
         query: str | None = None,
         label_ids: Sequence[str] | None = None,
         include_spam_trash: bool = False,
+        require_complete: bool = False,
     ) -> list[GmailMessageReference]:
         """List validated Gmail references across pages."""
 
@@ -121,6 +126,11 @@ class GmailClient:
         ):
             raise GmailClientError(
                 "page_size must be between 1 and 500"
+            )
+
+        if not isinstance(require_complete, bool):
+            raise GmailClientError(
+                "require_complete must be boolean"
             )
 
         references: list[GmailMessageReference] = []
@@ -192,27 +202,42 @@ class GmailClient:
                     if len(references) >= total_limit:
                         break
 
-                if len(references) >= total_limit:
-                    break
-
                 next_page_token = response.get(
                     "nextPageToken"
                 )
+                normalized_page_token: str | None = None
 
-                if next_page_token is None:
-                    break
+                if next_page_token is not None:
+                    if (
+                        not isinstance(
+                            next_page_token,
+                            str,
+                        )
+                        or not next_page_token.strip()
+                    ):
+                        raise GmailClientError(
+                            "Gmail returned an invalid page token"
+                        )
 
-                if (
-                    not isinstance(next_page_token, str)
-                    or not next_page_token.strip()
-                ):
-                    raise GmailClientError(
-                        "Gmail returned an invalid page token"
+                    normalized_page_token = (
+                        next_page_token.strip()
                     )
 
-                normalized_page_token = (
-                    next_page_token.strip()
-                )
+                if len(references) >= total_limit:
+                    if (
+                        require_complete
+                        and normalized_page_token
+                        is not None
+                    ):
+                        raise GmailListingLimitReached(
+                            "Gmail result limit reached "
+                            "before pagination completed"
+                        )
+
+                    break
+
+                if normalized_page_token is None:
+                    break
 
                 if not page_messages:
                     raise GmailClientError(

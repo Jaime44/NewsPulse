@@ -7,6 +7,7 @@ from unittest.mock import Mock, call
 from app.tools.gmail.gmail_client import (
     GmailClient,
     GmailClientError,
+    GmailListingLimitReached,
     GmailMessageMetadata,
     GmailMessageReference,
 )
@@ -161,6 +162,66 @@ class GmailClientPaginationTests(unittest.TestCase):
             1,
         )
 
+    def test_complete_listing_rejects_remaining_page(
+        self,
+    ) -> None:
+        self.list_page.return_value = {
+            "messages": [
+                {
+                    "id": "message-1",
+                    "threadId": "thread-1",
+                }
+            ],
+            "nextPageToken": "remaining-page",
+        }
+
+        with self.assertRaises(
+            GmailListingLimitReached
+        ) as raised:
+            self.client.list_message_references(
+                total_limit=1,
+                page_size=1,
+                require_complete=True,
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Gmail result limit reached "
+                "before pagination completed"
+            ),
+        )
+
+        self.list_page.assert_called_once()
+
+    def test_complete_listing_accepts_final_page(
+        self,
+    ) -> None:
+        self.list_page.return_value = {
+            "messages": [
+                {
+                    "id": "message-1",
+                    "threadId": "thread-1",
+                }
+            ],
+        }
+
+        result = self.client.list_message_references(
+            total_limit=1,
+            page_size=1,
+            require_complete=True,
+        )
+
+        self.assertEqual(
+            result,
+            [
+                GmailMessageReference(
+                    message_id="message-1",
+                    thread_id="thread-1",
+                )
+            ],
+        )
+
     def test_invalid_limits_are_rejected(
         self,
     ) -> None:
@@ -194,6 +255,25 @@ class GmailClientPaginationTests(unittest.TestCase):
                 ):
                     self.client.list_message_references(
                         page_size=invalid_page_size
+                    )
+
+        for invalid_requirement in (
+            "true",
+            1,
+            None,
+        ):
+            with self.subTest(
+                require_complete=(
+                    invalid_requirement
+                )
+            ):
+                with self.assertRaises(
+                    GmailClientError
+                ):
+                    self.client.list_message_references(
+                        require_complete=(
+                            invalid_requirement
+                        )
                     )
 
         self.list_page.assert_not_called()
