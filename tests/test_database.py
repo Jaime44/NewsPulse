@@ -108,12 +108,16 @@ class DatabaseSchemaTests(unittest.TestCase):
                 "oauth_credentials",
                 "ingestion_state",
                 "gmail_messages",
+                "newsletter_sources",
+                "message_classifications",
             }.issubset(tables)
         )
         self.assertTrue(
             {
                 "idx_gmail_messages_account_status",
                 "idx_gmail_messages_account_date",
+                "idx_newsletter_sources_account_active",
+                "idx_message_classifications_verdict",
             }.issubset(indexes)
         )
 
@@ -137,9 +141,47 @@ class DatabaseSchemaTests(unittest.TestCase):
                 self.insert_message(
                     connection,
                     status="unknown",
+
                 )
 
-    def test_deleting_account_removes_ingestion_data(
+    def test_invalid_classification_verdict_is_rejected(
+        self,
+    ) -> None:
+        with self.database.connect() as connection:
+            self.insert_account(connection)
+            self.insert_message(connection)
+
+            with self.assertRaises(
+                sqlite3.IntegrityError
+            ):
+                connection.execute(
+                    """
+                    INSERT INTO message_classifications (
+                        gmail_message_row_id,
+                        verdict,
+                        score,
+                        reasons_json,
+                        classifier_version,
+                        classified_at
+                    )
+                    SELECT
+                        id,
+                        'unknown',
+                        0,
+                        '[]',
+                        'rules-v1',
+                        ?
+                    FROM gmail_messages
+                    WHERE account_id = 1
+                      AND gmail_message_id = ?
+                    """,
+                    (
+                        NOW,
+                        "gmail-message-1",
+                    ),
+                )
+
+    def test_deleting_account_removes_owned_data(
         self,
     ) -> None:
         with self.database.connect() as connection:
@@ -162,9 +204,65 @@ class DatabaseSchemaTests(unittest.TestCase):
 
             connection.execute(
                 """
+                INSERT INTO newsletter_sources (
+                    account_id,
+                    source_type,
+                    source_value,
+                    decision,
+                    origin,
+                    confidence,
+                    active,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    1,
+                    'sender',
+                    'news@example.com',
+                    'include',
+                    'manual',
+                    100,
+                    1,
+                    ?,
+                    ?
+                )
+                """,
+                (NOW, NOW),
+            )
+
+            connection.execute(
+                """
                 DELETE FROM oauth_credentials
                 WHERE id = 1
                 """
+            )
+
+            connection.execute(
+                """
+                INSERT INTO message_classifications (
+                    gmail_message_row_id,
+                    verdict,
+                    score,
+                    reasons_json,
+                    classifier_version,
+                    classified_at
+                )
+                SELECT
+                    id,
+                    'newsletter',
+                    5,
+                    ?,
+                    'rules-v1',
+                    ?
+                FROM gmail_messages
+                WHERE account_id = 1
+                  AND gmail_message_id = ?
+                """,
+                (
+                    '["configured_sender"]',
+                    NOW,
+                    "gmail-message-1",
+                ),
             )
 
             state_count = connection.execute(
@@ -181,9 +279,29 @@ class DatabaseSchemaTests(unittest.TestCase):
                 """
             ).fetchone()["total"]
 
+            source_count = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM newsletter_sources
+                """
+            ).fetchone()["total"]
+
+            classification_count = (
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM message_classifications
+                    """
+                ).fetchone()["total"]
+            )
+
         self.assertEqual(state_count, 0)
         self.assertEqual(message_count, 0)
-
+        self.assertEqual(source_count, 0)
+        self.assertEqual(
+            classification_count,
+            0,
+        )
 
 if __name__ == "__main__":
     unittest.main()

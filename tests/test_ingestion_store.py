@@ -402,5 +402,290 @@ class IngestionStoreTests(unittest.TestCase):
             )
         )
 
+    def test_newsletter_classification_is_saved_and_loaded(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        classified_at = (
+            STARTED_AT + timedelta(minutes=10)
+        )
+
+        saved_classification = (
+            self.store.save_message_classification(
+                "gmail-message-1",
+                verdict="newsletter",
+                score=6,
+                reasons=(
+                    "list_id_header",
+                    "list_unsubscribe_header",
+                ),
+                classifier_version="rules-v1",
+                classified_at=classified_at,
+            )
+        )
+
+        loaded_classification = (
+            self.store.load_message_classification(
+                "gmail-message-1"
+            )
+        )
+        stored_message = self.store.load_message(
+            "gmail-message-1"
+        )
+
+        self.assertEqual(
+            loaded_classification,
+            saved_classification,
+        )
+        self.assertEqual(
+            saved_classification.gmail_message_id,
+            "gmail-message-1",
+        )
+        self.assertEqual(
+            saved_classification.verdict,
+            "newsletter",
+        )
+        self.assertEqual(
+            saved_classification.score,
+            6,
+        )
+        self.assertEqual(
+            saved_classification.reasons,
+            (
+                "list_id_header",
+                "list_unsubscribe_header",
+            ),
+        )
+        self.assertEqual(
+            saved_classification.classifier_version,
+            "rules-v1",
+        )
+        self.assertEqual(
+            saved_classification.classified_at,
+            classified_at,
+        )
+
+        self.assertIsNotNone(stored_message)
+        assert stored_message is not None
+        self.assertEqual(
+            stored_message.status,
+            "discovered",
+        )
+        self.assertIsNone(
+            stored_message.processed_at
+        )
+        self.assertIsNone(
+            stored_message.last_error_code
+        )
+
+    def test_not_newsletter_marks_message_skipped(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        classified_at = (
+            STARTED_AT + timedelta(minutes=10)
+        )
+
+        classification = (
+            self.store.save_message_classification(
+                "gmail-message-1",
+                verdict="not_newsletter",
+                score=0,
+                reasons=(),
+                classifier_version="rules-v1",
+                classified_at=classified_at,
+            )
+        )
+        stored_message = self.store.load_message(
+            "gmail-message-1"
+        )
+
+        self.assertEqual(
+            classification.reasons,
+            (),
+        )
+        self.assertIsNotNone(stored_message)
+        assert stored_message is not None
+        self.assertEqual(
+            stored_message.status,
+            "skipped",
+        )
+        self.assertEqual(
+            stored_message.processed_at,
+            classified_at,
+        )
+
+    def test_classification_can_be_replaced(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        first_classified_at = (
+            STARTED_AT + timedelta(minutes=10)
+        )
+        second_classified_at = (
+            STARTED_AT + timedelta(minutes=20)
+        )
+
+        first_classification = (
+            self.store.save_message_classification(
+                "gmail-message-1",
+                verdict="not_newsletter",
+                score=0,
+                reasons=(),
+                classifier_version="rules-v1",
+                classified_at=first_classified_at,
+            )
+        )
+
+        second_classification = (
+            self.store.save_message_classification(
+                "gmail-message-1",
+                verdict="newsletter",
+                score=5,
+                reasons=("configured_sender",),
+                classifier_version="rules-v2",
+                classified_at=second_classified_at,
+            )
+        )
+
+        stored_message = self.store.load_message(
+            "gmail-message-1"
+        )
+
+        with self.database.connect() as connection:
+            classification_count = (
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM message_classifications
+                    """
+                ).fetchone()["total"]
+            )
+
+        self.assertEqual(classification_count, 1)
+        self.assertEqual(
+            second_classification.gmail_message_row_id,
+            first_classification.gmail_message_row_id,
+        )
+        self.assertEqual(
+            second_classification.verdict,
+            "newsletter",
+        )
+        self.assertEqual(
+            second_classification.classifier_version,
+            "rules-v2",
+        )
+
+        self.assertIsNotNone(stored_message)
+        assert stored_message is not None
+        self.assertEqual(
+            stored_message.status,
+            "discovered",
+        )
+        self.assertIsNone(
+            stored_message.processed_at
+        )
+
+    def test_classification_requires_registered_message(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.save_message_classification(
+                "unknown-message",
+                verdict="newsletter",
+                score=5,
+                reasons=("configured_sender",),
+                classifier_version="rules-v1",
+                classified_at=STARTED_AT,
+            )
+
+    def test_invalid_classification_data_is_rejected(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        naive_timestamp = datetime(
+            2026,
+            9,
+            13,
+            10,
+            0,
+        )
+
+        valid_arguments = {
+            "verdict": "newsletter",
+            "score": 5,
+            "reasons": ("configured_sender",),
+            "classifier_version": "rules-v1",
+            "classified_at": STARTED_AT,
+        }
+
+        invalid_overrides = (
+            {"verdict": "unknown"},
+            {"score": -1},
+            {"score": True},
+            {"reasons": "configured_sender"},
+            {"reasons": ("",)},
+            {"reasons": (1,)},
+            {"classifier_version": " "},
+            {"classified_at": naive_timestamp},
+        )
+
+        for overrides in invalid_overrides:
+            with self.subTest(overrides=overrides):
+                arguments = {
+                    **valid_arguments,
+                    **overrides,
+                }
+
+                with self.assertRaises(
+                    IngestionStoreError
+                ):
+                    self.store.save_message_classification(
+                        "gmail-message-1",
+                        **arguments,
+                    )
+
+        self.assertIsNone(
+            self.store.load_message_classification(
+                "gmail-message-1"
+            )
+        )
+
 if __name__ == "__main__":
     unittest.main()

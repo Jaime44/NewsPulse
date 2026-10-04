@@ -10,6 +10,10 @@ from app.backend.bd.ingestion_store import (
     IngestionState,
     IngestionStoreError,
 )
+from app.backend.services.classifier import (
+    NewsletterClassification,
+    NewsletterVerdict,
+)
 from app.backend.services.gmail_ingestion import (
     GmailIngestionError,
     GmailIngestionService,
@@ -50,7 +54,26 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.gmail_client = Mock()
         self.store = Mock()
+        self.classification_service = Mock()
 
+        (
+            self.store
+            .load_message_classification
+            .return_value
+        ) = None
+
+        (
+            self.classification_service
+            .classify
+            .return_value
+        ) = NewsletterClassification(
+            verdict=NewsletterVerdict.NEWSLETTER,
+            score=5,
+            reasons=(
+                "list_id_header",
+                "bulk_precedence",
+            ),
+        )
         self.state = IngestionState(
             account_id=1,
             started_at=APPLICATION_STARTED_AT,
@@ -88,6 +111,9 @@ class GmailIngestionServiceTests(unittest.TestCase):
         self.service = GmailIngestionService(
             gmail_client=self.gmail_client,
             store=self.store,
+            classification_service=(
+                self.classification_service
+            ),
             clock=lambda: SCAN_STARTED_AT,
         )
         self.service.logger = Mock()
@@ -127,6 +153,9 @@ class GmailIngestionServiceTests(unittest.TestCase):
                 discovered_count=1,
                 already_known_count=0,
                 ignored_before_start_count=0,
+                newsletter_count=1,
+                review_count=0,
+                not_newsletter_count=0,
             ),
         )
 
@@ -170,6 +199,30 @@ class GmailIngestionServiceTests(unittest.TestCase):
             discovered_at=SCAN_STARTED_AT,
         )
 
+        (
+            self.classification_service
+            .classify
+            .assert_called_once_with(
+                self.metadata
+            )
+        )
+
+        (
+            self.store
+            .save_message_classification
+            .assert_called_once_with(
+                "message-1",
+                verdict="newsletter",
+                score=5,
+                reasons=(
+                    "list_id_header",
+                    "bulk_precedence",
+                ),
+                classifier_version="rules-v1",
+                classified_at=SCAN_STARTED_AT,
+            )
+        )
+
         self.store.mark_scan_successful.assert_called_once_with(
             completed_at=SCAN_STARTED_AT
         )
@@ -180,7 +233,11 @@ class GmailIngestionServiceTests(unittest.TestCase):
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
-        self.store.is_message_known.return_value = True
+        (
+            self.store
+            .load_message_classification
+            .return_value
+        ) = Mock()
 
         result = self.service.scan()
 
@@ -321,6 +378,9 @@ class GmailIngestionServiceTests(unittest.TestCase):
         service = GmailIngestionService(
             gmail_client=self.gmail_client,
             store=self.store,
+            classification_service=(
+                self.classification_service
+            ),
             clock=lambda: naive_clock,
         )
         service.logger = Mock()
@@ -465,6 +525,65 @@ class GmailIngestionServiceTests(unittest.TestCase):
         )
         self.assertNotIn(
             "sensitive-provider-value",
+            logged_value,
+        )
+
+    def test_classification_failure_keeps_cursor_for_retry(
+        self,
+    ) -> None:
+        self.gmail_client.list_message_references.return_value = [
+            self.reference
+        ]
+        self.store.is_message_known.return_value = False
+        self.gmail_client.get_message_metadata.return_value = (
+            self.metadata
+        )
+        self.store.register_message.return_value = True
+
+        (
+            self.classification_service
+            .classify
+            .side_effect
+        ) = RuntimeError(
+            "sensitive-classifier-value"
+        )
+
+        with self.assertRaises(
+            GmailIngestionError
+        ) as raised:
+            self.service.scan()
+
+        self.assertEqual(
+            str(raised.exception),
+            "Gmail ingestion scan failed",
+        )
+
+        self.store.register_message.assert_called_once()
+        (
+            self.store
+            .save_message_classification
+            .assert_not_called()
+        )
+        (
+            self.store
+            .mark_scan_successful
+            .assert_not_called()
+        )
+
+        logged_value = (
+            self.service
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertIn(
+            "RuntimeError",
+            logged_value,
+        )
+        self.assertNotIn(
+            "sensitive-classifier-value",
             logged_value,
         )
 

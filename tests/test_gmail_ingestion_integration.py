@@ -11,6 +11,15 @@ from app.backend.bd.db import Database
 from app.backend.bd.ingestion_store import (
     IngestionStore,
 )
+from app.backend.bd.newsletter_source_store import (
+    NewsletterSourceStore,
+)
+from app.backend.services.classifier import (
+    NewsletterClassifier,
+)
+from app.backend.services.newsletter_classification import (
+    NewsletterClassificationService,
+)
 from app.backend.services.gmail_ingestion import (
     GmailIngestionError,
     GmailIngestionService,
@@ -59,6 +68,16 @@ class GmailIngestionIntegrationTests(
         )
 
         self._insert_account()
+
+        self.source_store = NewsletterSourceStore(
+            self.database
+        )
+        self.classification_service = (
+            NewsletterClassificationService(
+                source_store=self.source_store,
+                classifier=NewsletterClassifier(),
+            )
+        )
 
         self.gmail_client = Mock()
 
@@ -147,6 +166,9 @@ class GmailIngestionIntegrationTests(
         service = GmailIngestionService(
             gmail_client=self.gmail_client,
             store=self.store,
+            classification_service=(
+                self.classification_service
+            ),
             clock=lambda: scan_time,
         )
         service.logger = Mock()
@@ -184,7 +206,11 @@ class GmailIngestionIntegrationTests(
                 "message-1"
             )
         )
-
+        first_classification = (
+            self.store.load_message_classification(
+                "message-1"
+            )
+        )
         self.assertIsNotNone(
             state_after_failure
         )
@@ -197,6 +223,14 @@ class GmailIngestionIntegrationTests(
 
         self.assertIsNotNone(
             first_stored_message
+        )
+        self.assertIsNotNone(
+            first_classification
+        )
+        assert first_classification is not None
+        self.assertEqual(
+            first_classification.verdict,
+            "newsletter",
         )
         self.assertIsNone(
             self.store.load_message(
@@ -234,7 +268,11 @@ class GmailIngestionIntegrationTests(
                 "message-2"
             )
         )
-
+        second_classification = (
+            self.store.load_message_classification(
+                "message-2"
+            )
+        )
         self.assertEqual(
             result.listed_count,
             2,
@@ -266,7 +304,14 @@ class GmailIngestionIntegrationTests(
         self.assertIsNotNone(
             second_stored_message
         )
-
+        self.assertIsNotNone(
+            second_classification
+        )
+        assert second_classification is not None
+        self.assertEqual(
+            second_classification.verdict,
+            "newsletter",
+        )
         (
             self.gmail_client
             .get_message_metadata

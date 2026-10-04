@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -35,6 +37,24 @@ class StoredGmailMessage:
     processed_at: datetime | None
     last_error_code: str | None
 
+@dataclass(frozen=True, slots=True)
+class StoredMessageClassification:
+    gmail_message_row_id: int
+    gmail_message_id: str
+    verdict: str
+    score: int
+    reasons: tuple[str, ...]
+    classifier_version: str
+    classified_at: datetime
+
+
+CLASSIFICATION_VERDICTS = frozenset(
+    {
+        "newsletter",
+        "review",
+        "not_newsletter",
+    }
+)
 
 def _as_utc(value: datetime) -> datetime:
     """Validate and normalize an aware timestamp to UTC."""
@@ -114,6 +134,75 @@ def _message_from_row(
         last_error_code=row["last_error_code"],
     )
 
+def _classification_from_row(
+    row: sqlite3.Row,
+) -> StoredMessageClassification:
+    try:
+        reasons_data = json.loads(
+            row["reasons_json"]
+        )
+    except (
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise IngestionStoreError(
+            "Stored classification reasons are invalid"
+        ) from exc
+
+    if (
+        not isinstance(reasons_data, list)
+        or any(
+            not isinstance(reason, str)
+            or not reason.strip()
+            for reason in reasons_data
+        )
+    ):
+        raise IngestionStoreError(
+            "Stored classification reasons are invalid"
+        )
+
+    return StoredMessageClassification(
+        gmail_message_row_id=(
+            row["gmail_message_row_id"]
+        ),
+        gmail_message_id=row["gmail_message_id"],
+        verdict=row["verdict"],
+        score=row["score"],
+        reasons=tuple(reasons_data),
+        classifier_version=(
+            row["classifier_version"]
+        ),
+        classified_at=_from_iso(
+            row["classified_at"]
+        ),
+    )
+
+def _normalize_classification_reasons(
+    reasons: Sequence[str],
+) -> tuple[str, ...]:
+    if isinstance(reasons, (str, bytes)):
+        raise IngestionStoreError(
+            "classification reasons must "
+            "be a sequence"
+        )
+
+    normalized_reasons: list[str] = []
+
+    for reason in reasons:
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+        ):
+            raise IngestionStoreError(
+                "classification reasons cannot "
+                "contain empty values"
+            )
+
+        normalized_reasons.append(
+            reason.strip()
+        )
+
+    return tuple(normalized_reasons)
 
 class IngestionStore:
     """Persist incremental Gmail ingestion state."""
@@ -411,3 +500,231 @@ class IngestionStore:
         return self.load_message(
             gmail_message_id
         ) is not None
+
+    def save_message_classification(
+        self,
+        gmail_message_id: str,
+        *,
+        verdict: str,
+        score: int,
+        reasons: Sequence[str],
+        classifier_version: str,
+        classified_at: datetime | None = None,
+    ) -> StoredMessageClassification:
+        """Save a classification and update message state atomically."""
+
+        message_id = _required_identifier(
+            gmail_message_id,
+            "gmail_message_id",
+        )
+
+        if not isinstance(verdict, str):
+            raise IngestionStoreError(
+                "classification verdict must be a string"
+            )
+
+        normalized_verdict = (
+            verdict.strip().casefold()
+        )
+
+        if (
+            normalized_verdict
+            not in CLASSIFICATION_VERDICTS
+        ):
+            raise IngestionStoreError(
+                "Unsupported classification verdict"
+            )
+
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, int)
+            or score < 0
+        ):
+            raise IngestionStoreError(
+                "classification score must be "
+                "a non-negative integer"
+            )
+
+        normalized_reasons = (
+            _normalize_classification_reasons(
+                reasons
+            )
+        )
+
+        if (
+            not isinstance(classifier_version, str)
+            or not classifier_version.strip()
+        ):
+            raise IngestionStoreError(
+                "classifier_version is required"
+            )
+
+        normalized_version = (
+            classifier_version.strip()
+        )
+        classification_time = _as_utc(
+            classified_at
+            or datetime.now(timezone.utc)
+        )
+
+        reasons_json = json.dumps(
+            normalized_reasons,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+        if normalized_verdict == "not_newsletter":
+            message_status = "skipped"
+            processed_at = (
+                classification_time.isoformat()
+            )
+        else:
+            message_status = "discovered"
+            processed_at = None
+
+        with self.database.connect() as connection:
+            message_row = connection.execute(
+                """
+                SELECT id
+                FROM gmail_messages
+                WHERE account_id = ?
+                  AND gmail_message_id = ?
+                """,
+                (
+                    self.ACCOUNT_ID,
+                    message_id,
+                ),
+            ).fetchone()
+
+            if message_row is None:
+                raise IngestionStoreError(
+                    "The Gmail message has not "
+                    "been registered"
+                )
+
+            message_row_id = message_row["id"]
+
+            connection.execute(
+                """
+                INSERT INTO message_classifications (
+                    gmail_message_row_id,
+                    verdict,
+                    score,
+                    reasons_json,
+                    classifier_version,
+                    classified_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(gmail_message_row_id)
+                DO UPDATE SET
+                    verdict = excluded.verdict,
+                    score = excluded.score,
+                    reasons_json = excluded.reasons_json,
+                    classifier_version =
+                        excluded.classifier_version,
+                    classified_at =
+                        excluded.classified_at
+                """,
+                (
+                    message_row_id,
+                    normalized_verdict,
+                    score,
+                    reasons_json,
+                    normalized_version,
+                    classification_time.isoformat(),
+                ),
+            )
+
+            connection.execute(
+                """
+                UPDATE gmail_messages
+                SET status = ?,
+                    updated_at = ?,
+                    processed_at = ?,
+                    last_error_code = NULL
+                WHERE id = ?
+                """,
+                (
+                    message_status,
+                    classification_time.isoformat(),
+                    processed_at,
+                    message_row_id,
+                ),
+            )
+
+            row = connection.execute(
+                """
+                SELECT
+                    classifications.gmail_message_row_id,
+                    messages.gmail_message_id,
+                    classifications.verdict,
+                    classifications.score,
+                    classifications.reasons_json,
+                    classifications.classifier_version,
+                    classifications.classified_at
+                FROM message_classifications
+                    AS classifications
+                JOIN gmail_messages AS messages
+                  ON messages.id = (
+                      classifications
+                      .gmail_message_row_id
+                  )
+                WHERE messages.account_id = ?
+                  AND messages.gmail_message_id = ?
+                """,
+                (
+                    self.ACCOUNT_ID,
+                    message_id,
+                ),
+            ).fetchone()
+
+        if row is None:
+            raise IngestionStoreError(
+                "Message classification could not "
+                "be loaded"
+            )
+
+        return _classification_from_row(row)
+
+    def load_message_classification(
+        self,
+        gmail_message_id: str,
+    ) -> StoredMessageClassification | None:
+        """Load the latest classification for one message."""
+
+        message_id = _required_identifier(
+            gmail_message_id,
+            "gmail_message_id",
+        )
+
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    classifications.gmail_message_row_id,
+                    messages.gmail_message_id,
+                    classifications.verdict,
+                    classifications.score,
+                    classifications.reasons_json,
+                    classifications.classifier_version,
+                    classifications.classified_at
+                FROM message_classifications
+                    AS classifications
+                JOIN gmail_messages AS messages
+                  ON messages.id = (
+                      classifications
+                      .gmail_message_row_id
+                  )
+                WHERE messages.account_id = ?
+                  AND messages.gmail_message_id = ?
+                """,
+                (
+                    self.ACCOUNT_ID,
+                    message_id,
+                ),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return _classification_from_row(row)

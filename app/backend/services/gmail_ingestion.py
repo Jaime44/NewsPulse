@@ -8,6 +8,13 @@ from app.backend.bd.ingestion_store import (
     IngestionStore,
     IngestionStoreError,
 )
+from app.backend.services.classifier import (
+    NewsletterVerdict,
+)
+from app.backend.services.newsletter_classification import (
+    CLASSIFIER_VERSION,
+    NewsletterClassificationService,
+)
 from app.tools.gmail.gmail_client import (
     GmailClient,
     GmailClientError,
@@ -30,6 +37,9 @@ class IngestionScanResult:
     discovered_count: int
     already_known_count: int
     ignored_before_start_count: int
+    newsletter_count: int
+    review_count: int
+    not_newsletter_count: int
 
 
 def _utc_now() -> datetime:
@@ -51,7 +61,7 @@ def _as_utc(value: datetime) -> datetime:
 
 
 class GmailIngestionService:
-    """Coordinate incremental Gmail discovery and storage."""
+    """Coordinate incremental Gmail discovery and classification."""
 
     CURSOR_OVERLAP_SECONDS = 1
 
@@ -59,10 +69,16 @@ class GmailIngestionService:
         self,
         gmail_client: GmailClient,
         store: IngestionStore,
+        classification_service: (
+            NewsletterClassificationService
+        ),
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self.gmail_client = gmail_client
         self.store = store
+        self.classification_service = (
+            classification_service
+        )
         self.clock = clock
         self.logger = AppLogger(
             "gmail_ingestion.log"
@@ -90,7 +106,7 @@ class GmailIngestionService:
         page_size: int = 100,
         label_ids: Sequence[str] | None = None,
     ) -> IngestionScanResult:
-        """Discover and persist Gmail messages incrementally."""
+        """Discover, classify and persist Gmail messages."""
 
         scan_started_at = _as_utc(
             self.clock()
@@ -130,13 +146,30 @@ class GmailIngestionService:
             discovered_count = 0
             already_known_count = 0
             ignored_before_start_count = 0
+            newsletter_count = 0
+            review_count = 0
+            not_newsletter_count = 0
 
             for reference in references:
-                if self.store.is_message_known(
-                    reference.message_id
-                ):
+                stored_classification = (
+                    self.store
+                    .load_message_classification(
+                        reference.message_id
+                    )
+                )
+
+                if stored_classification is not None:
                     already_known_count += 1
                     continue
+
+                message_was_known = (
+                    self.store.is_message_known(
+                        reference.message_id
+                    )
+                )
+
+                if message_was_known:
+                    already_known_count += 1
 
                 metadata = (
                     self.gmail_client
@@ -160,31 +193,66 @@ class GmailIngestionService:
                     )
 
                 if (
-                    metadata.internal_date_ms
+                    not message_was_known
+                    and metadata.internal_date_ms
                     < application_start_ms
                 ):
                     ignored_before_start_count += 1
                     continue
 
-                was_inserted = (
-                    self.store.register_message(
-                        gmail_message_id=(
-                            metadata.message_id
-                        ),
-                        gmail_thread_id=(
-                            metadata.thread_id
-                        ),
-                        internal_date_ms=(
-                            metadata.internal_date_ms
-                        ),
-                        discovered_at=scan_started_at,
+                if not message_was_known:
+                    was_inserted = (
+                        self.store.register_message(
+                            gmail_message_id=(
+                                metadata.message_id
+                            ),
+                            gmail_thread_id=(
+                                metadata.thread_id
+                            ),
+                            internal_date_ms=(
+                                metadata.internal_date_ms
+                            ),
+                            discovered_at=(
+                                scan_started_at
+                            ),
+                        )
                     )
+
+                    if was_inserted:
+                        discovered_count += 1
+                    else:
+                        already_known_count += 1
+
+                classification = (
+                    self.classification_service
+                    .classify(metadata)
                 )
 
-                if was_inserted:
-                    discovered_count += 1
+                self.store.save_message_classification(
+                    metadata.message_id,
+                    verdict=(
+                        classification.verdict.value
+                    ),
+                    score=classification.score,
+                    reasons=classification.reasons,
+                    classifier_version=(
+                        CLASSIFIER_VERSION
+                    ),
+                    classified_at=scan_started_at,
+                )
+
+                if (
+                    classification.verdict
+                    is NewsletterVerdict.NEWSLETTER
+                ):
+                    newsletter_count += 1
+                elif (
+                    classification.verdict
+                    is NewsletterVerdict.REVIEW
+                ):
+                    review_count += 1
                 else:
-                    already_known_count += 1
+                    not_newsletter_count += 1
 
             self.store.mark_scan_successful(
                 completed_at=scan_started_at
@@ -202,6 +270,11 @@ class GmailIngestionService:
                 ),
                 ignored_before_start_count=(
                     ignored_before_start_count
+                ),
+                newsletter_count=newsletter_count,
+                review_count=review_count,
+                not_newsletter_count=(
+                    not_newsletter_count
                 ),
             )
         except GmailIngestionError:
