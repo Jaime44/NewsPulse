@@ -4,7 +4,6 @@ import importlib
 import sys
 import unittest
 
-from pathlib import Path
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,6 +12,10 @@ from unittest.mock import Mock, patch
 from cryptography.fernet import Fernet
 
 from app.config import AppConfig
+from app.backend.bd.newsletter_source_store import (
+    NewsletterSource,
+    NewsletterSourceStoreError,
+)
 from app.backend.services.gmail_ingestion import (
     GmailIngestionError,
     IngestionScanResult,
@@ -582,6 +585,566 @@ class GmailRouteTests(unittest.TestCase):
             logged_message,
         )
 
+    def test_newsletter_sources_require_authentication(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=None,
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "list_active_sources",
+            ) as list_sources,
+        ):
+            response = self.client.get(
+                "/api/newsletter-sources"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Not authenticated"},
+        )
+        list_sources.assert_not_called()
+
+    def test_newsletter_sources_return_safe_rules(
+        self,
+    ) -> None:
+        timestamp = datetime(
+            2026,
+            10,
+            4,
+            15,
+            0,
+            tzinfo=timezone.utc,
+        )
+        last_matched_at = datetime(
+            2026,
+            10,
+            4,
+            16,
+            0,
+            tzinfo=timezone.utc,
+        )
+
+        sender_source = NewsletterSource(
+            id=10,
+            account_id=1,
+            source_type="sender",
+            source_value="news@example.com",
+            decision="include",
+            origin="manual",
+            confidence=100,
+            active=True,
+            created_at=timestamp,
+            updated_at=last_matched_at,
+            last_matched_at=last_matched_at,
+        )
+        domain_source = NewsletterSource(
+            id=11,
+            account_id=1,
+            source_type="domain",
+            source_value="blocked.example.com",
+            decision="exclude",
+            origin="manual",
+            confidence=100,
+            active=True,
+            created_at=timestamp,
+            updated_at=timestamp,
+            last_matched_at=None,
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "list_active_sources",
+                return_value=(
+                    domain_source,
+                    sender_source,
+                ),
+            ),
+        ):
+            response = self.client.get(
+                "/api/newsletter-sources"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+        self.assertEqual(
+            response.headers["Cache-Control"],
+            "no-store",
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "sources": [
+                    {
+                        "source_type": "domain",
+                        "source_value": (
+                            "blocked.example.com"
+                        ),
+                        "decision": "exclude",
+                        "origin": "manual",
+                        "confidence": 100,
+                        "active": True,
+                        "created_at": (
+                            timestamp.isoformat()
+                        ),
+                        "updated_at": (
+                            timestamp.isoformat()
+                        ),
+                        "last_matched_at": None,
+                    },
+                    {
+                        "source_type": "sender",
+                        "source_value": (
+                            "news@example.com"
+                        ),
+                        "decision": "include",
+                        "origin": "manual",
+                        "confidence": 100,
+                        "active": True,
+                        "created_at": (
+                            timestamp.isoformat()
+                        ),
+                        "updated_at": (
+                            last_matched_at
+                            .isoformat()
+                        ),
+                        "last_matched_at": (
+                            last_matched_at
+                            .isoformat()
+                        ),
+                    },
+                ]
+            },
+        )
+
+        response_text = response.get_data(
+            as_text=True
+        )
+        self.assertNotIn(
+            '"account_id"',
+            response_text,
+        )
+        self.assertNotIn(
+            '"id"',
+            response_text,
+        )
+
+    def test_newsletter_source_failure_is_sanitized(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "list_active_sources",
+                side_effect=(
+                    NewsletterSourceStoreError(
+                        "sensitive-database-detail"
+                    )
+                ),
+            ),
+            patch.object(
+                self.web_app.logger,
+                "error",
+            ) as error_log,
+        ):
+            response = self.client.get(
+                "/api/newsletter-sources"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            500,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Newsletter sources unavailable"
+                )
+            },
+        )
+
+        error_log.assert_called_once()
+        logged_message = (
+            error_log.call_args.args[0]
+        )
+
+        self.assertIn(
+            "NewsletterSourceStoreError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-database-detail",
+            logged_message,
+        )
+
+    def test_newsletter_source_save_requires_authentication(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=None,
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "save_source",
+            ) as save_source,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                    "decision": "include",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Not authenticated"},
+        )
+        save_source.assert_not_called()
+
+    def test_newsletter_source_save_requires_action_header(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "save_source",
+            ) as save_source,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                    "decision": "include",
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Invalid newsletter source request"
+                )
+            },
+        )
+        save_source.assert_not_called()
+
+    def test_newsletter_source_save_rejects_invalid_payloads(
+        self,
+    ) -> None:
+        invalid_payloads = (
+            [],
+            {
+                "source_type": "sender",
+                "source_value": "news@example.com",
+            },
+            {
+                "source_type": "sender",
+                "source_value": "news@example.com",
+                "decision": "include",
+                "origin": "automatic",
+            },
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "save_source",
+            ) as save_source,
+        ):
+            for payload in invalid_payloads:
+                with self.subTest(
+                    payload=payload
+                ):
+                    response = self.client.post(
+                        "/api/newsletter-sources",
+                        json=payload,
+                        headers={
+                            "X-NewsPulse-Action": (
+                                "manage-source"
+                            )
+                        },
+                    )
+
+                    self.assertEqual(
+                        response.status_code,
+                        400,
+                    )
+                    self.assertEqual(
+                        response.get_json(),
+                        {
+                            "error": (
+                                "Invalid newsletter "
+                                "source data"
+                            )
+                        },
+                    )
+
+        save_source.assert_not_called()
+
+    def test_newsletter_source_save_forces_manual_origin(
+        self,
+    ) -> None:
+        timestamp = datetime(
+            2026,
+            10,
+            4,
+            17,
+            0,
+            tzinfo=timezone.utc,
+        )
+
+        stored_source = NewsletterSource(
+            id=12,
+            account_id=1,
+            source_type="sender",
+            source_value="news@example.com",
+            decision="include",
+            origin="manual",
+            confidence=100,
+            active=True,
+            created_at=timestamp,
+            updated_at=timestamp,
+            last_matched_at=None,
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "save_source",
+                return_value=stored_source,
+            ) as save_source,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                    "decision": "include",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+        self.assertEqual(
+            response.headers["Cache-Control"],
+            "no-store",
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "status": "saved",
+                "source": {
+                    "source_type": "sender",
+                    "source_value": (
+                        "news@example.com"
+                    ),
+                    "decision": "include",
+                    "origin": "manual",
+                    "confidence": 100,
+                    "active": True,
+                    "created_at": (
+                        timestamp.isoformat()
+                    ),
+                    "updated_at": (
+                        timestamp.isoformat()
+                    ),
+                    "last_matched_at": None,
+                },
+            },
+        )
+
+        save_source.assert_called_once_with(
+            "sender",
+            "news@example.com",
+            decision="include",
+            origin="manual",
+            confidence=100,
+        )
+
+    def test_invalid_newsletter_source_is_rejected(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "save_source",
+                side_effect=(
+                    NewsletterSourceStoreError(
+                        "sensitive-validation-detail"
+                    )
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources",
+                json={
+                    "source_type": "sender",
+                    "source_value": "invalid",
+                    "decision": "include",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            400,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Invalid newsletter source data"
+                )
+            },
+        )
+        self.assertNotIn(
+            "sensitive-validation-detail",
+            response.get_data(as_text=True),
+        )
+
+    def test_newsletter_source_save_failure_is_sanitized(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "save_source",
+                side_effect=RuntimeError(
+                    "sensitive-database-detail"
+                ),
+            ),
+            patch.object(
+                self.web_app.logger,
+                "error",
+            ) as error_log,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                    "decision": "include",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            500,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Newsletter source could not be saved"
+                )
+            },
+        )
+
+        error_log.assert_called_once()
+        logged_message = (
+            error_log.call_args.args[0]
+        )
+
+        self.assertIn(
+            "RuntimeError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-database-detail",
+            logged_message,
+        )
+
     def test_ingestion_scan_requires_post_and_authentication(
         self,
     ) -> None:
@@ -648,6 +1211,342 @@ class GmailRouteTests(unittest.TestCase):
             },
         )
         build_ingestion.assert_not_called()
+
+    def test_newsletter_source_deactivation_requires_authentication(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=None,
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+            ) as deactivate_source,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources/deactivate",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Not authenticated"},
+        )
+        deactivate_source.assert_not_called()
+
+    def test_newsletter_source_deactivation_requires_action_header(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+            ) as deactivate_source,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources/deactivate",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Invalid newsletter source request"
+                )
+            },
+        )
+        deactivate_source.assert_not_called()
+
+    def test_newsletter_source_deactivation_rejects_invalid_payloads(
+        self,
+    ) -> None:
+        invalid_payloads = (
+            [],
+            {
+                "source_type": "sender",
+            },
+            {
+                "source_type": "sender",
+                "source_value": "news@example.com",
+                "decision": "include",
+            },
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+            ) as deactivate_source,
+        ):
+            for payload in invalid_payloads:
+                with self.subTest(
+                    payload=payload
+                ):
+                    response = self.client.post(
+                        (
+                            "/api/newsletter-sources"
+                            "/deactivate"
+                        ),
+                        json=payload,
+                        headers={
+                            "X-NewsPulse-Action": (
+                                "manage-source"
+                            )
+                        },
+                    )
+
+                    self.assertEqual(
+                        response.status_code,
+                        400,
+                    )
+                    self.assertEqual(
+                        response.get_json(),
+                        {
+                            "error": (
+                                "Invalid newsletter "
+                                "source data"
+                            )
+                        },
+                    )
+
+        deactivate_source.assert_not_called()
+
+    def test_newsletter_source_can_be_deactivated(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+                return_value=True,
+            ) as deactivate_source,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources/deactivate",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+        self.assertEqual(
+            response.headers["Cache-Control"],
+            "no-store",
+        )
+        self.assertEqual(
+            response.get_json(),
+            {"status": "deactivated"},
+        )
+        deactivate_source.assert_called_once_with(
+            "sender",
+            "news@example.com",
+        )
+
+    def test_newsletter_source_deactivation_returns_not_found(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+                return_value=False,
+            ),
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources/deactivate",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            404,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Active newsletter source not found"
+                )
+            },
+        )
+
+    def test_invalid_newsletter_source_deactivation_is_rejected(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+                side_effect=(
+                    NewsletterSourceStoreError(
+                        "sensitive-validation-detail"
+                    )
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources/deactivate",
+                json={
+                    "source_type": "invalid",
+                    "source_value": "news@example.com",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            400,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Invalid newsletter source data"
+                )
+            },
+        )
+        self.assertNotIn(
+            "sensitive-validation-detail",
+            response.get_data(as_text=True),
+        )
+
+    def test_newsletter_source_deactivation_failure_is_sanitized(
+        self,
+    ) -> None:
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_account",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app
+                .newsletter_source_store,
+                "deactivate_source",
+                side_effect=RuntimeError(
+                    "sensitive-database-detail"
+                ),
+            ),
+            patch.object(
+                self.web_app.logger,
+                "error",
+            ) as error_log,
+        ):
+            response = self.client.post(
+                "/api/newsletter-sources/deactivate",
+                json={
+                    "source_type": "sender",
+                    "source_value": "news@example.com",
+                },
+                headers={
+                    "X-NewsPulse-Action": (
+                        "manage-source"
+                    )
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            500,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Newsletter source could not "
+                    "be deactivated"
+                )
+            },
+        )
+
+        error_log.assert_called_once()
+        logged_message = (
+            error_log.call_args.args[0]
+        )
+
+        self.assertIn(
+            "RuntimeError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-database-detail",
+            logged_message,
+        )
 
     def test_ingestion_scan_returns_safe_summary(
         self,

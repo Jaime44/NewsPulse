@@ -20,6 +20,11 @@ from app.backend.bd.oauth_store import (
     OAuthCredentialStore,
     StoredOAuthCredentials,
 )
+from app.backend.bd.newsletter_source_store import (
+    NewsletterSource,
+    NewsletterSourceStore,
+    NewsletterSourceStoreError,
+)
 from app.backend.services.oauth_credentials import (
     OAuthReauthenticationRequired,
     OAuthRefreshTemporarilyUnavailable,
@@ -44,6 +49,23 @@ INGESTION_ACTION_HEADER = (
 )
 INGESTION_ACTION_VALUE = "scan"
 
+NEWSLETTER_SOURCE_ACTION_VALUE = "manage-source"
+
+NEWSLETTER_SOURCE_PAYLOAD_FIELDS = frozenset(
+    {
+        "source_type",
+        "source_value",
+        "decision",
+    }
+)
+
+NEWSLETTER_SOURCE_IDENTIFIER_FIELDS = frozenset(
+    {
+        "source_type",
+        "source_value",
+    }
+)
+
 ingestion_scan_lock = Lock()
 
 
@@ -57,6 +79,9 @@ database = Database(settings.database_path)
 oauth_store = OAuthCredentialStore(
     database=database,
     encryption_key_path=settings.token_encryption_key_path,
+)
+newsletter_source_store = NewsletterSourceStore(
+    database
 )
 
 app = Flask(
@@ -125,6 +150,47 @@ def get_authenticated_gmail_service():
         "v1",
         credentials=credentials,
     )
+
+def has_valid_action_header(
+    expected_value: str,
+) -> bool:
+    """Validate one intentional browser action."""
+
+    action_header = request.headers.get(
+        INGESTION_ACTION_HEADER,
+        "",
+    )
+
+    return hmac.compare_digest(
+        action_header,
+        expected_value,
+    )
+
+def serialize_newsletter_source(
+    source: NewsletterSource,
+) -> dict[str, object]:
+    """Return the public API representation of one source."""
+
+    return {
+        "source_type": source.source_type,
+        "source_value": source.source_value,
+        "decision": source.decision,
+        "origin": source.origin,
+        "confidence": source.confidence,
+        "active": source.active,
+        "created_at": (
+            source.created_at.isoformat()
+        ),
+        "updated_at": (
+            source.updated_at.isoformat()
+        ),
+        "last_matched_at": (
+            source.last_matched_at.isoformat()
+            if source.last_matched_at
+            is not None
+            else None
+        ),
+    }
 
 @app.route('/')
 def index():
@@ -413,6 +479,252 @@ def get_gmail_messages():
             {"error": "Failed to retrieve messages"}
         ), 500
 
+@app.get("/api/newsletter-sources")
+def get_newsletter_sources():
+    """List active newsletter source rules."""
+
+    try:
+        stored_account = (
+            get_authenticated_account()
+        )
+
+        if stored_account is None:
+            return jsonify(
+                {"error": "Not authenticated"}
+            ), 401
+
+        sources = (
+            newsletter_source_store
+            .list_active_sources()
+        )
+
+        response = jsonify(
+            {
+                "sources": [
+                    serialize_newsletter_source(
+                        source
+                    )
+                    for source in sources
+                ]
+            }
+        )
+        response.headers["Cache-Control"] = (
+            "no-store"
+        )
+
+        return response
+
+    except NewsletterSourceStoreError as exc:
+        logger.error(
+            "Newsletter source listing failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Newsletter sources unavailable"
+                )
+            }
+        ), 500
+
+    except Exception as exc:
+        logger.error(
+            "Newsletter source listing failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Newsletter sources unavailable"
+                )
+            }
+        ), 500
+
+@app.post("/api/newsletter-sources")
+def save_newsletter_source():
+    """Create or update one manual newsletter source rule."""
+
+    try:
+        stored_account = (
+            get_authenticated_account()
+        )
+
+        if stored_account is None:
+            return jsonify(
+                {"error": "Not authenticated"}
+            ), 401
+
+        if not has_valid_action_header(
+            NEWSLETTER_SOURCE_ACTION_VALUE
+        ):
+            logger.warning(
+                "Rejected invalid newsletter source request"
+            )
+            return jsonify(
+                {
+                    "error": (
+                        "Invalid newsletter source request"
+                    )
+                }
+            ), 403
+
+        payload = request.get_json(
+            silent=True
+        )
+
+        if (
+            not isinstance(payload, dict)
+            or set(payload)
+            != NEWSLETTER_SOURCE_PAYLOAD_FIELDS
+        ):
+            return jsonify(
+                {
+                    "error": (
+                        "Invalid newsletter source data"
+                    )
+                }
+            ), 400
+
+        source = newsletter_source_store.save_source(
+            payload["source_type"],
+            payload["source_value"],
+            decision=payload["decision"],
+            origin="manual",
+            confidence=100,
+        )
+
+        response = jsonify(
+            {
+                "status": "saved",
+                "source": (
+                    serialize_newsletter_source(
+                        source
+                    )
+                ),
+            }
+        )
+        response.headers["Cache-Control"] = (
+            "no-store"
+        )
+
+        return response
+
+    except NewsletterSourceStoreError:
+        return jsonify(
+            {
+                "error": (
+                    "Invalid newsletter source data"
+                )
+            }
+        ), 400
+
+    except Exception as exc:
+        logger.error(
+            "Newsletter source save failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Newsletter source could not be saved"
+                )
+            }
+        ), 500
+
+@app.post("/api/newsletter-sources/deactivate")
+def deactivate_newsletter_source():
+    """Deactivate one newsletter source without deleting it."""
+
+    try:
+        stored_account = (
+            get_authenticated_account()
+        )
+
+        if stored_account is None:
+            return jsonify(
+                {"error": "Not authenticated"}
+            ), 401
+
+        if not has_valid_action_header(
+            NEWSLETTER_SOURCE_ACTION_VALUE
+        ):
+            logger.warning(
+                "Rejected invalid newsletter source request"
+            )
+            return jsonify(
+                {
+                    "error": (
+                        "Invalid newsletter source request"
+                    )
+                }
+            ), 403
+
+        payload = request.get_json(
+            silent=True
+        )
+
+        if (
+            not isinstance(payload, dict)
+            or set(payload)
+            != NEWSLETTER_SOURCE_IDENTIFIER_FIELDS
+        ):
+            return jsonify(
+                {
+                    "error": (
+                        "Invalid newsletter source data"
+                    )
+                }
+            ), 400
+
+        deactivated = (
+            newsletter_source_store
+            .deactivate_source(
+                payload["source_type"],
+                payload["source_value"],
+            )
+        )
+
+        if not deactivated:
+            return jsonify(
+                {
+                    "error": (
+                        "Active newsletter source not found"
+                    )
+                }
+            ), 404
+
+        response = jsonify(
+            {"status": "deactivated"}
+        )
+        response.headers["Cache-Control"] = (
+            "no-store"
+        )
+
+        return response
+
+    except NewsletterSourceStoreError:
+        return jsonify(
+            {
+                "error": (
+                    "Invalid newsletter source data"
+                )
+            }
+        ), 400
+
+    except Exception as exc:
+        logger.error(
+            "Newsletter source deactivation failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Newsletter source could not "
+                    "be deactivated"
+                )
+            }
+        ), 500
+
 @app.post("/api/ingestion/scan")
 def run_gmail_ingestion():
     """Run one authenticated incremental Gmail scan."""
@@ -429,14 +741,8 @@ def run_gmail_ingestion():
                 {"error": "Not authenticated"}
             ), 401
 
-        action_header = request.headers.get(
-            INGESTION_ACTION_HEADER,
-            "",
-        )
-
-        if not hmac.compare_digest(
-            action_header,
-            INGESTION_ACTION_VALUE,
+        if not has_valid_action_header(
+            INGESTION_ACTION_VALUE
         ):
             logger.warning(
                 "Rejected invalid manual ingestion request"
