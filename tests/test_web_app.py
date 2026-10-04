@@ -1900,7 +1900,274 @@ class GmailRouteTests(unittest.TestCase):
             "function analyzeNewsletters()",
             html,
         )
+    def test_dashboard_exposes_newsletter_source_manager(
+        self,
+    ) -> None:
+        stored_account = Mock(
+            email="owner@example.com",
+        )
 
+        with patch.object(
+            self.web_app,
+            "get_authenticated_account",
+            return_value=stored_account,
+        ):
+            response = self.client.get(
+                "/dashboard"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        html = response.get_data(
+            as_text=True
+        )
+
+        expected_markers = (
+            'id="manage-newsletter-sources-button"',
+            'onclick="manageNewsletterSources()"',
+            'id="newsletter-source-manager"',
+            'id="newsletter-source-form"',
+            'id="newsletter-source-type"',
+            'id="newsletter-source-value"',
+            'id="newsletter-source-decision"',
+            'id="save-newsletter-source-button"',
+            'id="newsletter-source-list"',
+            'id="newsletter-source-empty"',
+            'value="sender"',
+            'value="domain"',
+            'value="list_id"',
+            'value="gmail_label"',
+            'value="include"',
+            'value="exclude"',
+            "function manageNewsletterSources()",
+        )
+
+        for marker in expected_markers:
+            with self.subTest(
+                marker=marker
+            ):
+                self.assertIn(
+                    marker,
+                    html,
+                )
+
+        self.assertNotIn(
+            "Función de gestión de "
+            "suscripciones en desarrollo",
+            html,
+        )
+    def test_dashboard_loads_newsletter_sources_safely(
+        self,
+    ) -> None:
+        stored_account = Mock(
+            email="owner@example.com",
+        )
+
+        with patch.object(
+            self.web_app,
+            "get_authenticated_account",
+            return_value=stored_account,
+        ):
+            response = self.client.get(
+                "/dashboard"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        html = response.get_data(
+            as_text=True
+        )
+
+        expected_markers = (
+            (
+                "async function "
+                "loadNewsletterSources()"
+            ),
+            (
+                "function "
+                "renderNewsletterSources("
+            ),
+            (
+                "function "
+                "isValidNewsletterSource("
+            ),
+            "'/api/newsletter-sources'",
+            "credentials: 'same-origin'",
+            (
+                "data.sources.every("
+            ),
+            (
+                "renderNewsletterSources("
+            ),
+            "list.replaceChildren()",
+            (
+                "value.textContent = ("
+            ),
+            (
+                "await loadNewsletterSources()"
+            ),
+        )
+
+        for marker in expected_markers:
+            with self.subTest(
+                marker=marker
+            ):
+                self.assertIn(
+                    marker,
+                    html,
+                )
+
+        self.assertNotIn(
+            "list.innerHTML",
+            html,
+        )
+    def test_dashboard_saves_newsletter_sources_safely(
+        self,
+    ) -> None:
+        stored_account = Mock(
+            email="owner@example.com",
+        )
+
+        with patch.object(
+            self.web_app,
+            "get_authenticated_account",
+            return_value=stored_account,
+        ):
+            response = self.client.get(
+                "/dashboard"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        html = response.get_data(
+            as_text=True
+        )
+
+        expected_markers = (
+            (
+                "async function "
+                "saveNewsletterSource("
+            ),
+            "event.preventDefault()",
+            "const payload = {",
+            (
+                "source_type: "
+                "sourceType.value"
+            ),
+            (
+                "source_value: "
+                "normalizedValue"
+            ),
+            (
+                "decision: "
+                "sourceDecision.value"
+            ),
+            "method: 'POST'",
+            "'Content-Type': (",
+            "'application/json'",
+            "'X-NewsPulse-Action': (",
+            "'manage-source'",
+            "body: JSON.stringify(",
+            (
+                "data.status !== 'saved'"
+            ),
+            (
+                "await "
+                "loadNewsletterSources()"
+            ),
+            "form.reset()",
+            "'submit',",
+            "saveNewsletterSource",
+        )
+
+        for marker in expected_markers:
+            with self.subTest(
+                marker=marker
+            ):
+                self.assertIn(
+                    marker,
+                    html,
+                )
+    def test_dashboard_deactivates_newsletter_sources_safely(
+        self,
+    ) -> None:
+        stored_account = Mock(
+            email="owner@example.com",
+        )
+
+        with patch.object(
+            self.web_app,
+            "get_authenticated_account",
+            return_value=stored_account,
+        ):
+            response = self.client.get(
+                "/dashboard"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        html = response.get_data(
+            as_text=True
+        )
+
+        expected_markers = (
+            (
+                "deactivateButton.textContent = ("
+            ),
+            (
+                "deactivateButton.addEventListener("
+            ),
+            "'click',",
+            (
+                "async function "
+                "deactivateNewsletterSource("
+            ),
+            "window.confirm(",
+            (
+                "source_type: "
+                "source.source_type"
+            ),
+            (
+                "source_value: "
+                "source.source_value"
+            ),
+            (
+                "'/api/newsletter-sources'"
+            ),
+            "'/deactivate'",
+            "method: 'POST'",
+            "'X-NewsPulse-Action': (",
+            "'manage-source'",
+            (
+                "data.status !== 'deactivated'"
+            ),
+            (
+                "await "
+                "loadNewsletterSources()"
+            ),
+            "item.appendChild(actions)",
+        )
+
+        for marker in expected_markers:
+            with self.subTest(
+                marker=marker
+            ):
+                self.assertIn(
+                    marker,
+                    html,
+                )
     def test_dashboard_without_account_id_does_not_load_store(
         self,
     ) -> None:

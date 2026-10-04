@@ -203,6 +203,161 @@
             margin: 1rem 0;
             display: none;
         }
+        .source-manager {
+            margin-top: 2rem;
+        }
+
+        .source-manager-description {
+            color: #666;
+            margin-bottom: 1.5rem;
+        }
+
+        .source-form-grid {
+            display: grid;
+            grid-template-columns:
+                repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .source-field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .source-field label {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .source-field input,
+        .source-field select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background: white;
+            font: inherit;
+        }
+
+        .source-form-actions {
+            display: flex;
+            align-items: end;
+        }
+
+        .source-list-container {
+            margin-top: 2rem;
+        }
+
+        .source-list-container h3 {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+
+        .source-list {
+            list-style: none;
+            display: grid;
+            gap: 0.75rem;
+        }
+
+        .source-rule {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: #f8f9fa;
+        }
+
+        .source-rule-main {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            min-width: 0;
+        }
+
+        .source-rule-value {
+            overflow-wrap: anywhere;
+            color: #333;
+        }
+
+        .source-rule-type {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .source-decision {
+            flex-shrink: 0;
+            padding: 0.35rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .source-decision.include {
+            color: #176b36;
+            background: #dcf5e5;
+        }
+
+        .source-decision.exclude {
+            color: #9b2c2c;
+            background: #fde2e2;
+        }
+
+        .source-rule-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-shrink: 0;
+        }
+
+        .source-deactivate-button {
+            padding: 0.45rem 0.7rem;
+            border: 1px solid #c0392b;
+            border-radius: 5px;
+            background: white;
+            color: #c0392b;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        .source-deactivate-button:hover {
+            color: white;
+            background: #c0392b;
+        }
+
+        .source-deactivate-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 600px) {
+            .source-rule {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .source-rule-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+
+        .source-status.error-text {
+            color: #e74c3c;
+        }
+
+        .source-list-empty {
+            color: #666;
+        }
+
+        .source-status {
+            min-height: 1.5rem;
+            margin-top: 1rem;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -257,12 +412,127 @@
                 >
                     🔍 Analizar Newsletters
                 </button>
-                <button class="action-btn secondary" onclick="manageSubscriptions()">
-                    ⚙️ Gestionar Suscripciones
+                <button
+                    type="button"
+                    class="action-btn secondary"
+                    id="manage-newsletter-sources-button"
+                    onclick="manageNewsletterSources()"
+                >
+                    ⚙️ Gestionar fuentes
                 </button>
             </div>
         </div>
+        <section
+            class="actions source-manager"
+            id="newsletter-source-manager"
+            aria-labelledby="newsletter-source-manager-title"
+            hidden
+        >
+            <h2 id="newsletter-source-manager-title">
+                Fuentes de newsletters
+            </h2>
 
+            <p class="source-manager-description">
+                Indica qué remitentes, dominios, List-ID o
+                etiquetas deben incluirse o excluirse del análisis.
+            </p>
+
+            <form
+                id="newsletter-source-form"
+                autocomplete="off"
+            >
+                <div class="source-form-grid">
+                    <div class="source-field">
+                        <label for="newsletter-source-type">
+                            Tipo de fuente
+                        </label>
+                        <select
+                            id="newsletter-source-type"
+                            name="source_type"
+                            required
+                        >
+                            <option value="sender">
+                                Remitente
+                            </option>
+                            <option value="domain">
+                                Dominio
+                            </option>
+                            <option value="list_id">
+                                List-ID
+                            </option>
+                            <option value="gmail_label">
+                                Etiqueta de Gmail
+                            </option>
+                        </select>
+                    </div>
+
+                    <div class="source-field">
+                        <label for="newsletter-source-value">
+                            Valor
+                        </label>
+                        <input
+                            type="text"
+                            id="newsletter-source-value"
+                            name="source_value"
+                            placeholder="news@example.com"
+                            required
+                        >
+                    </div>
+
+                    <div class="source-field">
+                        <label for="newsletter-source-decision">
+                            Decisión
+                        </label>
+                        <select
+                            id="newsletter-source-decision"
+                            name="decision"
+                            required
+                        >
+                            <option value="include">
+                                Incluir como newsletter
+                            </option>
+                            <option value="exclude">
+                                Excluir del análisis
+                            </option>
+                        </select>
+                    </div>
+
+                    <div class="source-form-actions">
+                        <button
+                            type="submit"
+                            class="action-btn"
+                            id="save-newsletter-source-button"
+                        >
+                            Guardar regla
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <p
+                class="source-status"
+                id="newsletter-source-status"
+                role="status"
+                aria-live="polite"
+            ></p>
+
+            <div class="source-list-container">
+                <h3>Reglas activas</h3>
+
+                <p
+                    class="source-list-empty"
+                    id="newsletter-source-empty"
+                >
+                    Las reglas todavía no se han cargado.
+                </p>
+
+                <ul
+                    class="source-list"
+                    id="newsletter-source-list"
+                    aria-live="polite"
+                ></ul>
+            </div>
+        </section>
         <div
             class="loading"
             id="loading"
@@ -580,15 +850,542 @@
                 hideLoading();
             }
         }
+        const NEWSLETTER_SOURCE_TYPE_LABELS = (
+            Object.freeze({
+                sender: 'Remitente',
+                domain: 'Dominio',
+                list_id: 'List-ID',
+                gmail_label: 'Etiqueta de Gmail',
+            })
+        );
 
-        function manageSubscriptions() {
-            showError('Función de gestión de suscripciones en desarrollo');
+        const NEWSLETTER_SOURCE_DECISION_LABELS = (
+            Object.freeze({
+                include: 'Incluir',
+                exclude: 'Excluir',
+            })
+        );
+
+        function setNewsletterSourceStatus(
+            message,
+            isError = false
+        ) {
+            const status = document.getElementById(
+                'newsletter-source-status'
+            );
+
+            status.textContent = message;
+            status.classList.toggle(
+                'error-text',
+                isError
+            );
+        }
+
+        function isValidNewsletterSource(
+            source
+        ) {
+            if (
+                source === null
+                || typeof source !== 'object'
+            ) {
+                return false;
+            }
+
+            const validType = (
+                Object.prototype.hasOwnProperty.call(
+                    NEWSLETTER_SOURCE_TYPE_LABELS,
+                    source.source_type
+                )
+            );
+
+            const validDecision = (
+                Object.prototype.hasOwnProperty.call(
+                    NEWSLETTER_SOURCE_DECISION_LABELS,
+                    source.decision
+                )
+            );
+
+            return (
+                validType
+                && validDecision
+                && typeof source.source_value
+                === 'string'
+                && source.source_value.length > 0
+            );
+        }
+
+        function renderNewsletterSources(
+            sources
+        ) {
+            const list = document.getElementById(
+                'newsletter-source-list'
+            );
+            const emptyMessage = document.getElementById(
+                'newsletter-source-empty'
+            );
+
+            list.replaceChildren();
+
+            if (sources.length === 0) {
+                emptyMessage.textContent = (
+                    'No hay reglas activas.'
+                );
+                emptyMessage.hidden = false;
+                return;
+            }
+
+            emptyMessage.hidden = true;
+
+            sources.forEach(source => {
+                const item = document.createElement(
+                    'li'
+                );
+                item.className = 'source-rule';
+
+                const main = document.createElement(
+                    'div'
+                );
+                main.className = 'source-rule-main';
+
+                const value = document.createElement(
+                    'strong'
+                );
+                value.className = 'source-rule-value';
+                value.textContent = (
+                    source.source_value
+                );
+
+                const type = document.createElement(
+                    'span'
+                );
+                type.className = 'source-rule-type';
+                type.textContent = (
+                    NEWSLETTER_SOURCE_TYPE_LABELS[
+                        source.source_type
+                    ]
+                );
+
+                const decision = document.createElement(
+                    'span'
+                );
+                decision.className = (
+                    'source-decision '
+                    + source.decision
+                );
+                decision.textContent = (
+                    NEWSLETTER_SOURCE_DECISION_LABELS[
+                        source.decision
+                    ]
+                );
+
+                const actions = document.createElement(
+                    'div'
+                );
+                actions.className = (
+                    'source-rule-actions'
+                );
+
+                const deactivateButton = (
+                    document.createElement('button')
+                );
+                deactivateButton.type = 'button';
+                deactivateButton.className = (
+                    'source-deactivate-button'
+                );
+                deactivateButton.textContent = (
+                    'Desactivar'
+                );
+
+                deactivateButton.addEventListener(
+                    'click',
+                    () => {
+                        deactivateNewsletterSource(
+                            source,
+                            deactivateButton
+                        );
+                    }
+                );
+
+                main.appendChild(value);
+                main.appendChild(type);
+
+                actions.appendChild(decision);
+                actions.appendChild(
+                    deactivateButton
+                );
+
+                item.appendChild(main);
+                item.appendChild(actions);
+
+                list.appendChild(item);
+            });
+        }
+
+        async function loadNewsletterSources() {
+            const manageButton = document.getElementById(
+                'manage-newsletter-sources-button'
+            );
+
+            manageButton.disabled = true;
+            manageButton.setAttribute(
+                'aria-busy',
+                'true'
+            );
+
+            setNewsletterSourceStatus(
+                'Cargando reglas...'
+            );
+
+            try {
+                const response = await fetch(
+                    '/api/newsletter-sources',
+                    {
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': (
+                                'application/json'
+                            ),
+                        },
+                    }
+                );
+
+                let data = {};
+
+                try {
+                    data = await response.json();
+                } catch {
+                    data = {};
+                }
+
+                if (!response.ok) {
+                    throw new Error(
+                        data.error
+                        || 'No se pudieron cargar las reglas'
+                    );
+                }
+
+                if (
+                    !Array.isArray(data.sources)
+                    || !data.sources.every(
+                        isValidNewsletterSource
+                    )
+                ) {
+                    throw new Error(
+                        'La respuesta de reglas no es válida'
+                    );
+                }
+
+                renderNewsletterSources(
+                    data.sources
+                );
+
+                const total = data.sources.length;
+
+                setNewsletterSourceStatus(
+                    total === 1
+                        ? '1 regla activa.'
+                        : `${total} reglas activas.`
+                );
+            } catch (error) {
+                setNewsletterSourceStatus(
+                    'Error al cargar las reglas: '
+                    + error.message,
+                    true
+                );
+
+                return false;
+            } finally {
+                manageButton.disabled = false;
+                manageButton.removeAttribute(
+                    'aria-busy'
+                );
+            }
+        }
+        async function saveNewsletterSource(
+            event
+        ) {
+            event.preventDefault();
+
+            const form = event.currentTarget;
+            const saveButton = document.getElementById(
+                'save-newsletter-source-button'
+            );
+            const sourceType = document.getElementById(
+                'newsletter-source-type'
+            );
+            const sourceValue = document.getElementById(
+                'newsletter-source-value'
+            );
+            const sourceDecision = document.getElementById(
+                'newsletter-source-decision'
+            );
+
+            if (saveButton.disabled) {
+                return;
+            }
+
+            const normalizedValue = (
+                sourceValue.value.trim()
+            );
+
+            if (!normalizedValue) {
+                setNewsletterSourceStatus(
+                    'Debes indicar un valor para la fuente.',
+                    true
+                );
+                sourceValue.focus();
+                return;
+            }
+
+            const payload = {
+                source_type: sourceType.value,
+                source_value: normalizedValue,
+                decision: sourceDecision.value,
+            };
+
+            saveButton.disabled = true;
+            saveButton.setAttribute(
+                'aria-busy',
+                'true'
+            );
+
+            setNewsletterSourceStatus(
+                'Guardando regla...'
+            );
+
+            try {
+                const response = await fetch(
+                    '/api/newsletter-sources',
+                    {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': (
+                                'application/json'
+                            ),
+                            'Content-Type': (
+                                'application/json'
+                            ),
+                            'X-NewsPulse-Action': (
+                                'manage-source'
+                            ),
+                        },
+                        body: JSON.stringify(
+                            payload
+                        ),
+                    }
+                );
+
+                let data = {};
+
+                try {
+                    data = await response.json();
+                } catch {
+                    data = {};
+                }
+
+                if (!response.ok) {
+                    throw new Error(
+                        data.error
+                        || 'No se pudo guardar la regla'
+                    );
+                }
+
+                if (
+                    data.status !== 'saved'
+                    || !isValidNewsletterSource(
+                        data.source
+                    )
+                ) {
+                    throw new Error(
+                        'La respuesta de guardado no es válida'
+                    );
+                }
+
+                form.reset();
+
+                const listReloaded = (
+                    await loadNewsletterSources()
+                );
+
+                if (!listReloaded) {
+                    setNewsletterSourceStatus(
+                        'La regla se guardó, pero la '
+                        + 'lista no pudo actualizarse.',
+                        true
+                    );
+                    return;
+                }
+
+                setNewsletterSourceStatus(
+                    'Regla guardada correctamente.'
+                );
+
+                sourceValue.focus();
+            } catch (error) {
+                setNewsletterSourceStatus(
+                    'Error al guardar la regla: '
+                    + error.message,
+                    true
+                );
+            } finally {
+                saveButton.disabled = false;
+                saveButton.removeAttribute(
+                    'aria-busy'
+                );
+            }
+        }
+        async function deactivateNewsletterSource(
+            source,
+            deactivateButton
+        ) {
+            if (!isValidNewsletterSource(source)) {
+                setNewsletterSourceStatus(
+                    'La regla seleccionada no es válida.',
+                    true
+                );
+                return;
+            }
+
+            if (deactivateButton.disabled) {
+                return;
+            }
+
+            const confirmed = window.confirm(
+                '¿Quieres desactivar esta regla?'
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            const payload = {
+                source_type: source.source_type,
+                source_value: source.source_value,
+            };
+
+            deactivateButton.disabled = true;
+            deactivateButton.setAttribute(
+                'aria-busy',
+                'true'
+            );
+
+            setNewsletterSourceStatus(
+                'Desactivando regla...'
+            );
+
+            try {
+                const response = await fetch(
+                    (
+                        '/api/newsletter-sources'
+                        + '/deactivate'
+                    ),
+                    {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': (
+                                'application/json'
+                            ),
+                            'Content-Type': (
+                                'application/json'
+                            ),
+                            'X-NewsPulse-Action': (
+                                'manage-source'
+                            ),
+                        },
+                        body: JSON.stringify(
+                            payload
+                        ),
+                    }
+                );
+
+                let data = {};
+
+                try {
+                    data = await response.json();
+                } catch {
+                    data = {};
+                }
+
+                if (!response.ok) {
+                    throw new Error(
+                        data.error
+                        || 'No se pudo desactivar la regla'
+                    );
+                }
+
+                if (
+                    data.status !== 'deactivated'
+                ) {
+                    throw new Error(
+                        'La respuesta de desactivación '
+                        + 'no es válida'
+                    );
+                }
+
+                const listReloaded = (
+                    await loadNewsletterSources()
+                );
+
+                if (!listReloaded) {
+                    setNewsletterSourceStatus(
+                        'La regla se desactivó, pero la '
+                        + 'lista no pudo actualizarse.',
+                        true
+                    );
+                    return;
+                }
+
+                setNewsletterSourceStatus(
+                    'Regla desactivada correctamente.'
+                );
+            } catch (error) {
+                setNewsletterSourceStatus(
+                    'Error al desactivar la regla: '
+                    + error.message,
+                    true
+                );
+            } finally {
+                deactivateButton.disabled = false;
+                deactivateButton.removeAttribute(
+                    'aria-busy'
+                );
+            }
+        }
+        async function manageNewsletterSources() {
+            const manager = document.getElementById(
+                'newsletter-source-manager'
+            );
+
+            manager.hidden = false;
+
+            manager.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+            });
+
+            await loadNewsletterSources();
+
+            document.getElementById(
+                'newsletter-source-value'
+            ).focus();
         }
 
         // Load initial data
-        window.addEventListener('load', function() {
-            loadGmailProfile();
-        });
+        window.addEventListener(
+            'load',
+            function() {
+                document.getElementById(
+                    'newsletter-source-form'
+                ).addEventListener(
+                    'submit',
+                    saveNewsletterSource
+                );
+
+                loadGmailProfile();
+            }
+        );
     </script>
 </body>
 </html>
