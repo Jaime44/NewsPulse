@@ -147,7 +147,16 @@
             background: #3367d6;
             transform: translateY(-2px);
         }
+        .action-btn:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            transform: none;
+        }
 
+        .action-btn:disabled:hover {
+            background: #4285f4;
+            transform: none;
+        }
         .action-btn.secondary {
             background: #6c757d;
         }
@@ -240,7 +249,12 @@
                 <button class="action-btn" onclick="loadGmailMessages()">
                     📧 Ver Mensajes Recientes
                 </button>
-                <button class="action-btn secondary" onclick="analyzeNewsletters()">
+                <button
+                    type="button"
+                    class="action-btn secondary"
+                    id="run-ingestion-button"
+                    onclick="runIngestionScan()"
+                >
                     🔍 Analizar Newsletters
                 </button>
                 <button class="action-btn secondary" onclick="manageSubscriptions()">
@@ -249,22 +263,51 @@
             </div>
         </div>
 
-        <div class="loading" id="loading">
+        <div
+            class="loading"
+            id="loading"
+            aria-live="polite"
+        >
             <div class="spinner"></div>
-            <p>Cargando datos...</p>
+            <p id="loading-message">
+                Cargando datos...
+            </p>
         </div>
 
-        <div class="error" id="error"></div>
-        <div class="success" id="success"></div>
+        <div
+            class="error"
+            id="error"
+            role="alert"
+        ></div>
+        <div
+            class="success"
+            id="success"
+            role="status"
+            aria-live="polite"
+        ></div>
 
         <div id="results"></div>
     </div>
 
     <script>
-        function showLoading() {
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('error').style.display = 'none';
-            document.getElementById('success').style.display = 'none';
+        function showLoading(
+            message = 'Cargando datos...'
+        ) {
+            document.getElementById(
+                'loading-message'
+            ).textContent = message;
+
+            document.getElementById(
+                'loading'
+            ).style.display = 'block';
+
+            document.getElementById(
+                'error'
+            ).style.display = 'none';
+
+            document.getElementById(
+                'success'
+            ).style.display = 'none';
         }
 
         function hideLoading() {
@@ -361,8 +404,181 @@
             results.innerHTML = html;
         }
 
-        function analyzeNewsletters() {
-            showError('Función de análisis de newsletters en desarrollo');
+        function displayIngestionResult(data) {
+            const results = document.getElementById(
+                'results'
+            );
+            const counts = data.counts || {};
+
+            const section = document.createElement(
+                'section'
+            );
+            section.className = 'actions';
+            section.style.marginTop = '2rem';
+
+            const title = document.createElement('h2');
+            title.textContent = (
+                'Resultado del último análisis'
+            );
+            section.appendChild(title);
+
+            const completedAt = new Date(
+                data.cursor_after
+            );
+
+            const completedText = (
+                Number.isNaN(completedAt.getTime())
+                    ? 'No disponible'
+                    : completedAt.toLocaleString(
+                        'es-ES'
+                    )
+            );
+
+            const completedParagraph = (
+                document.createElement('p')
+            );
+            completedParagraph.textContent = (
+                `Completado: ${completedText}`
+            );
+            section.appendChild(
+                completedParagraph
+            );
+
+            const grid = document.createElement(
+                'div'
+            );
+            grid.className = 'stats-grid';
+            grid.style.marginTop = '1rem';
+            grid.style.marginBottom = '0';
+
+            const displayedCounts = [
+                [
+                    'Mensajes encontrados',
+                    counts.listed,
+                ],
+                [
+                    'Mensajes nuevos',
+                    counts.discovered,
+                ],
+                [
+                    'Ya conocidos',
+                    counts.already_known,
+                ],
+                [
+                    'Newsletters',
+                    counts.newsletter,
+                ],
+                [
+                    'Revisión pendiente',
+                    counts.review,
+                ],
+                [
+                    'No newsletters',
+                    counts.not_newsletter,
+                ],
+                [
+                    'Históricos ignorados',
+                    counts.ignored_before_start,
+                ],
+            ];
+
+            displayedCounts.forEach(
+                ([label, value]) => {
+                    const card = (
+                        document.createElement('div')
+                    );
+                    card.className = 'stat-card';
+
+                    const number = (
+                        document.createElement('div')
+                    );
+                    number.className = 'stat-number';
+                    number.textContent = String(
+                        value ?? 0
+                    );
+
+                    const description = (
+                        document.createElement('div')
+                    );
+                    description.className = (
+                        'stat-label'
+                    );
+                    description.textContent = label;
+
+                    card.appendChild(number);
+                    card.appendChild(description);
+                    grid.appendChild(card);
+                }
+            );
+
+            section.appendChild(grid);
+            results.replaceChildren(section);
+        }
+
+        async function runIngestionScan() {
+            const button = document.getElementById(
+                'run-ingestion-button'
+            );
+
+            button.disabled = true;
+            button.setAttribute(
+                'aria-busy',
+                'true'
+            );
+
+            showLoading(
+                'Analizando mensajes nuevos...'
+            );
+
+            try {
+                const response = await fetch(
+                    '/api/ingestion/scan',
+                    {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': (
+                                'application/json'
+                            ),
+                            'X-NewsPulse-Action': (
+                                'scan'
+                            ),
+                        },
+                    }
+                );
+
+                let data = {};
+
+                try {
+                    data = await response.json();
+                } catch {
+                    data = {};
+                }
+
+                if (!response.ok) {
+                    throw new Error(
+                        data.error
+                        || 'No se pudo completar el análisis'
+                    );
+                }
+
+                displayIngestionResult(data);
+
+                showSuccess(
+                    'Análisis completado correctamente'
+                );
+            } catch (error) {
+                showError(
+                    'Error al analizar newsletters: '
+                    + error.message
+                );
+            } finally {
+                button.disabled = false;
+                button.removeAttribute(
+                    'aria-busy'
+                );
+                hideLoading();
+            }
         }
 
         function manageSubscriptions() {

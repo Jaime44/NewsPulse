@@ -5,12 +5,18 @@ import sys
 import unittest
 
 from pathlib import Path
+from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from cryptography.fernet import Fernet
 
 from app.config import AppConfig
+from app.backend.services.gmail_ingestion import (
+    GmailIngestionError,
+    IngestionScanResult,
+)
 from app.backend.services.oauth_credentials import (
     OAuthReauthenticationRequired,
     OAuthRefreshTemporarilyUnavailable,
@@ -576,6 +582,288 @@ class GmailRouteTests(unittest.TestCase):
             logged_message,
         )
 
+    def test_ingestion_scan_requires_post_and_authentication(
+        self,
+    ) -> None:
+        get_response = self.client.get(
+            "/api/ingestion/scan"
+        )
+
+        self.assertEqual(
+            get_response.status_code,
+            405,
+        )
+
+        with patch.object(
+            self.web_app,
+            "get_authenticated_gmail_service",
+            return_value=None,
+        ):
+            post_response = self.client.post(
+                "/api/ingestion/scan",
+                headers={
+                    "X-NewsPulse-Action": "scan"
+                },
+            )
+
+        self.assertEqual(
+            post_response.status_code,
+            401,
+        )
+        self.assertEqual(
+            post_response.get_json(),
+            {"error": "Not authenticated"},
+        )
+
+    def test_ingestion_scan_requires_action_header(
+        self,
+    ) -> None:
+        self.authenticate_session()
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_gmail_service",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app,
+                "build_gmail_ingestion_service",
+            ) as build_ingestion,
+        ):
+            response = self.client.post(
+                "/api/ingestion/scan"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Invalid ingestion request"
+                )
+            },
+        )
+        build_ingestion.assert_not_called()
+
+    def test_ingestion_scan_returns_safe_summary(
+        self,
+    ) -> None:
+        self.authenticate_session()
+
+        gmail_service = Mock()
+        ingestion_service = Mock()
+
+        scan_started_at = datetime(
+            2026,
+            10,
+            4,
+            10,
+            0,
+            tzinfo=timezone.utc,
+        )
+        cursor_before = datetime(
+            2026,
+            10,
+            4,
+            9,
+            0,
+            tzinfo=timezone.utc,
+        )
+
+        ingestion_service.scan.return_value = (
+            IngestionScanResult(
+                scan_started_at=scan_started_at,
+                cursor_before=cursor_before,
+                cursor_after=scan_started_at,
+                gmail_query="after:1791104399",
+                listed_count=4,
+                discovered_count=2,
+                already_known_count=1,
+                ignored_before_start_count=1,
+                newsletter_count=1,
+                review_count=1,
+                not_newsletter_count=0,
+            )
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_gmail_service",
+                return_value=gmail_service,
+            ),
+            patch.object(
+                self.web_app,
+                "build_gmail_ingestion_service",
+                return_value=ingestion_service,
+            ) as build_ingestion,
+        ):
+            response = self.client.post(
+                "/api/ingestion/scan",
+                headers={
+                    "X-NewsPulse-Action": "scan"
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "status": "completed",
+                "scan_started_at": (
+                    scan_started_at.isoformat()
+                ),
+                "cursor_before": (
+                    cursor_before.isoformat()
+                ),
+                "cursor_after": (
+                    scan_started_at.isoformat()
+                ),
+                "counts": {
+                    "listed": 4,
+                    "discovered": 2,
+                    "already_known": 1,
+                    "ignored_before_start": 1,
+                    "newsletter": 1,
+                    "review": 1,
+                    "not_newsletter": 0,
+                },
+            },
+        )
+
+        self.assertNotIn(
+            "gmail_query",
+            response.get_json(),
+        )
+
+        build_ingestion.assert_called_once_with(
+            gmail_service=gmail_service,
+            database=self.web_app.database,
+        )
+        ingestion_service.scan.assert_called_once_with(
+            user_id="me",
+            total_limit=500,
+            page_size=100,
+        )
+
+    def test_ingestion_scan_rejects_concurrent_run(
+        self,
+    ) -> None:
+        self.authenticate_session()
+
+        self.web_app.ingestion_scan_lock.acquire()
+
+        try:
+            with (
+                patch.object(
+                    self.web_app,
+                    "get_authenticated_gmail_service",
+                    return_value=Mock(),
+                ),
+                patch.object(
+                    self.web_app,
+                    "build_gmail_ingestion_service",
+                ) as build_ingestion,
+            ):
+                response = self.client.post(
+                    "/api/ingestion/scan",
+                    headers={
+                        "X-NewsPulse-Action": "scan"
+                    },
+                )
+        finally:
+            self.web_app.ingestion_scan_lock.release()
+
+        self.assertEqual(
+            response.status_code,
+            409,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "An ingestion scan is "
+                    "already running"
+                )
+            },
+        )
+        build_ingestion.assert_not_called()
+
+    def test_ingestion_failure_is_sanitized_and_unlocks(
+        self,
+    ) -> None:
+        self.authenticate_session()
+
+        ingestion_service = Mock()
+        ingestion_service.scan.side_effect = (
+            GmailIngestionError(
+                "sensitive-ingestion-detail"
+            )
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_gmail_service",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app,
+                "build_gmail_ingestion_service",
+                return_value=ingestion_service,
+            ),
+            patch.object(
+                self.web_app.logger,
+                "error",
+            ) as error_log,
+        ):
+            response = self.client.post(
+                "/api/ingestion/scan",
+                headers={
+                    "X-NewsPulse-Action": "scan"
+                },
+            )
+
+        self.assertEqual(
+            response.status_code,
+            503,
+        )
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "Gmail ingestion is "
+                    "temporarily unavailable"
+                )
+            },
+        )
+
+        error_log.assert_called_once()
+        logged_message = (
+            error_log.call_args.args[0]
+        )
+
+        self.assertIn(
+            "GmailIngestionError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-ingestion-detail",
+            logged_message,
+        )
+        self.assertFalse(
+            self.web_app
+            .ingestion_scan_lock
+            .locked()
+        )
+
     def test_logout_requires_post_and_clears_session(self) -> None:
         self.authenticate_session()
 
@@ -649,6 +937,68 @@ class GmailRouteTests(unittest.TestCase):
         )
         self.assertNotIn(
             'href="/logout"',
+            html,
+        )
+
+    def test_dashboard_exposes_manual_ingestion_control(
+        self,
+    ) -> None:
+        stored_account = Mock(
+            email="owner@example.com",
+        )
+
+        with patch.object(
+            self.web_app,
+            "get_authenticated_account",
+            return_value=stored_account,
+        ):
+            response = self.client.get(
+                "/dashboard"
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        html = response.get_data(
+            as_text=True
+        )
+
+        self.assertIn(
+            'id="run-ingestion-button"',
+            html,
+        )
+        self.assertIn(
+            'onclick="runIngestionScan()"',
+            html,
+        )
+        self.assertIn(
+            "async function runIngestionScan()",
+            html,
+        )
+        self.assertIn(
+            "'/api/ingestion/scan'",
+            html,
+        )
+        self.assertIn(
+            "method: 'POST'",
+            html,
+        )
+        self.assertIn(
+            "'X-NewsPulse-Action':",
+            html,
+        )
+        self.assertIn(
+            "'scan'",
+            html,
+        )
+        self.assertIn(
+            "results.replaceChildren(section)",
+            html,
+        )
+        self.assertNotIn(
+            "function analyzeNewsletters()",
             html,
         )
 

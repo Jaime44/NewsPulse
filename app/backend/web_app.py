@@ -1,6 +1,8 @@
 import hmac
 import os
 
+from threading import Lock
+
 from flask import (
     Flask,
     jsonify,
@@ -23,12 +25,28 @@ from app.backend.services.oauth_credentials import (
     OAuthRefreshTemporarilyUnavailable,
     ensure_valid_credentials,
 )
+from app.backend.services.gmail_ingestion import (
+    GmailIngestionError,
+)
+from app.backend.services.ingestion_factory import (
+    build_gmail_ingestion_service,
+)
 from app.tools.logger import AppLogger
 from app.config import AppConfig, read_secret_file
 from app.tools.gmail.gmail_client import GmailClient
 
 
-  
+MANUAL_SCAN_TOTAL_LIMIT = 500
+MANUAL_SCAN_PAGE_SIZE = 100
+
+INGESTION_ACTION_HEADER = (
+    "X-NewsPulse-Action"
+)
+INGESTION_ACTION_VALUE = "scan"
+
+ingestion_scan_lock = Lock()
+
+
 logger = AppLogger("web_app.log")
 logger.debug(f"START: ")
 
@@ -394,6 +412,173 @@ def get_gmail_messages():
         return jsonify(
             {"error": "Failed to retrieve messages"}
         ), 500
+
+@app.post("/api/ingestion/scan")
+def run_gmail_ingestion():
+    """Run one authenticated incremental Gmail scan."""
+
+    scan_lock_acquired = False
+
+    try:
+        gmail_service = (
+            get_authenticated_gmail_service()
+        )
+
+        if gmail_service is None:
+            return jsonify(
+                {"error": "Not authenticated"}
+            ), 401
+
+        action_header = request.headers.get(
+            INGESTION_ACTION_HEADER,
+            "",
+        )
+
+        if not hmac.compare_digest(
+            action_header,
+            INGESTION_ACTION_VALUE,
+        ):
+            logger.warning(
+                "Rejected invalid manual ingestion request"
+            )
+            return jsonify(
+                {"error": "Invalid ingestion request"}
+            ), 403
+
+        scan_lock_acquired = (
+            ingestion_scan_lock.acquire(
+                blocking=False
+            )
+        )
+
+        if not scan_lock_acquired:
+            return jsonify(
+                {
+                    "error": (
+                        "An ingestion scan is "
+                        "already running"
+                    )
+                }
+            ), 409
+
+        ingestion_service = (
+            build_gmail_ingestion_service(
+                gmail_service=gmail_service,
+                database=database,
+            )
+        )
+
+        result = ingestion_service.scan(
+            user_id="me",
+            total_limit=(
+                MANUAL_SCAN_TOTAL_LIMIT
+            ),
+            page_size=(
+                MANUAL_SCAN_PAGE_SIZE
+            ),
+        )
+
+        return jsonify(
+            {
+                "status": "completed",
+                "scan_started_at": (
+                    result
+                    .scan_started_at
+                    .isoformat()
+                ),
+                "cursor_before": (
+                    result
+                    .cursor_before
+                    .isoformat()
+                ),
+                "cursor_after": (
+                    result
+                    .cursor_after
+                    .isoformat()
+                ),
+                "counts": {
+                    "listed": (
+                        result.listed_count
+                    ),
+                    "discovered": (
+                        result.discovered_count
+                    ),
+                    "already_known": (
+                        result.already_known_count
+                    ),
+                    "ignored_before_start": (
+                        result
+                        .ignored_before_start_count
+                    ),
+                    "newsletter": (
+                        result.newsletter_count
+                    ),
+                    "review": (
+                        result.review_count
+                    ),
+                    "not_newsletter": (
+                        result
+                        .not_newsletter_count
+                    ),
+                },
+            }
+        )
+
+    except OAuthReauthenticationRequired:
+        session.clear()
+        logger.warning(
+            "Google authorization must be "
+            "granted again for ingestion"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Google authorization expired; "
+                    "authenticate again"
+                )
+            }
+        ), 401
+
+    except OAuthRefreshTemporarilyUnavailable:
+        logger.warning(
+            "Google credential refresh is "
+            "temporarily unavailable for ingestion"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Google authentication is "
+                    "temporarily unavailable"
+                )
+            }
+        ), 503
+
+    except GmailIngestionError as exc:
+        logger.error(
+            "Manual Gmail ingestion failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Gmail ingestion is "
+                    "temporarily unavailable"
+                )
+            }
+        ), 503
+
+    except Exception as exc:
+        logger.error(
+            "Manual Gmail ingestion failed: "
+            f"{type(exc).__name__}"
+        )
+        return jsonify(
+            {"error": "Gmail ingestion failed"}
+        ), 500
+
+    finally:
+        if scan_lock_acquired:
+            ingestion_scan_lock.release()
 
 @app.post("/logout")
 def logout():
