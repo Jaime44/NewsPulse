@@ -267,6 +267,73 @@ class MessagesClient:
                 "Failed to retrieve Gmail message"
             ) from exc
 
+    def get_attachment(
+        self,
+        message_id: str,
+        attachment_id: str,
+        user_id: str = "me",
+    ) -> Dict[str, Any]:
+        """Retrieve one Gmail message attachment."""
+
+        if (
+            not isinstance(message_id, str)
+            or not message_id.strip()
+        ):
+            raise MessagesClientError(
+                "message_id is required"
+            )
+
+        if (
+            not isinstance(attachment_id, str)
+            or not attachment_id.strip()
+        ):
+            raise MessagesClientError(
+                "attachment_id is required"
+            )
+
+        if (
+            not isinstance(user_id, str)
+            or not user_id.strip()
+        ):
+            raise MessagesClientError(
+                "user_id is required"
+            )
+
+        try:
+            return (
+                self.service
+                .users()
+                .messages()
+                .attachments()
+                .get(
+                    userId=user_id.strip(),
+                    messageId=message_id.strip(),
+                    id=attachment_id.strip(),
+                )
+                .execute()
+            )
+        except HttpError as exc:
+            status_code = getattr(
+                exc.resp,
+                "status",
+                "unknown",
+            )
+            self.logger.error(
+                "Gmail attachments.get failed with "
+                f"HTTP status {status_code}"
+            )
+            raise MessagesClientError(
+                "Failed to retrieve Gmail attachment"
+            ) from exc
+        except Exception as exc:
+            self.logger.error(
+                "Gmail attachments.get failed: "
+                f"{type(exc).__name__}"
+            )
+            raise MessagesClientError(
+                "Failed to retrieve Gmail attachment"
+            ) from exc
+
     def send_message(self, message: Dict[str, Any], user_id: str = "me") -> Dict[str, Any]:
         """
         Send a message on behalf of the user.

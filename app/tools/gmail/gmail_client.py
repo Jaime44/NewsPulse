@@ -44,6 +44,209 @@ class GmailMessageMetadata:
     precedence: str | None
     auto_submitted: str | None
 
+@dataclass(frozen=True, slots=True)
+class GmailMimePart:
+    """One validated part of a Gmail MIME tree."""
+
+    mime_type: str
+    filename: str | None
+    headers: tuple[tuple[str, str], ...]
+    body_size: int
+    body_data: str | None
+    attachment_id: str | None
+    parts: tuple["GmailMimePart", ...]
+
+@dataclass(frozen=True, slots=True)
+class GmailFullMessage:
+    """A validated Gmail message with its MIME tree."""
+
+    message_id: str
+    thread_id: str
+    root_part: GmailMimePart
+
+@dataclass(frozen=True, slots=True)
+class GmailAttachmentData:
+    """Validated encoded data from one Gmail attachment."""
+
+    size: int
+    encoded_data: str
+
+
+def _parse_mime_part(
+    raw_part: object,
+    *,
+    depth: int,
+    max_depth: int,
+    part_counter: list[int],
+    max_parts: int,
+) -> GmailMimePart:
+    """Validate one MIME part and all its children."""
+
+    if not isinstance(raw_part, dict):
+        raise GmailClientError(
+            "Gmail returned an invalid MIME part"
+        )
+
+    if depth > max_depth:
+        raise GmailClientError(
+            "Gmail MIME nesting limit exceeded"
+        )
+
+    part_counter[0] += 1
+
+    if part_counter[0] > max_parts:
+        raise GmailClientError(
+            "Gmail MIME part limit exceeded"
+        )
+
+    raw_mime_type = raw_part.get(
+        "mimeType"
+    )
+
+    if (
+        not isinstance(raw_mime_type, str)
+        or not raw_mime_type.strip()
+    ):
+        raise GmailClientError(
+            "Gmail returned an invalid MIME type"
+        )
+
+    raw_filename = raw_part.get(
+        "filename",
+        "",
+    )
+
+    if not isinstance(raw_filename, str):
+        raise GmailClientError(
+            "Gmail returned an invalid MIME filename"
+        )
+
+    raw_headers = raw_part.get(
+        "headers",
+        [],
+    )
+
+    if not isinstance(raw_headers, list):
+        raise GmailClientError(
+            "Gmail returned invalid MIME headers"
+        )
+
+    headers: list[tuple[str, str]] = []
+
+    for raw_header in raw_headers:
+        if not isinstance(raw_header, dict):
+            raise GmailClientError(
+                "Gmail returned an invalid MIME header"
+            )
+
+        name = raw_header.get("name")
+        value = raw_header.get("value")
+
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(value, str)
+        ):
+            raise GmailClientError(
+                "Gmail returned an invalid MIME header"
+            )
+
+        headers.append(
+            (
+                name.strip().casefold(),
+                value.strip(),
+            )
+        )
+
+    raw_body = raw_part.get(
+        "body",
+        {},
+    )
+
+    if not isinstance(raw_body, dict):
+        raise GmailClientError(
+            "Gmail returned an invalid MIME body"
+        )
+
+    raw_size = raw_body.get(
+        "size",
+        0,
+    )
+
+    if (
+        isinstance(raw_size, bool)
+        or not isinstance(raw_size, int)
+        or raw_size < 0
+    ):
+        raise GmailClientError(
+            "Gmail returned an invalid MIME body size"
+        )
+
+    raw_data = raw_body.get("data")
+
+    if (
+        raw_data is not None
+        and not isinstance(raw_data, str)
+    ):
+        raise GmailClientError(
+            "Gmail returned invalid MIME body data"
+        )
+
+    raw_attachment_id = raw_body.get(
+        "attachmentId"
+    )
+
+    if raw_attachment_id is not None:
+        if (
+            not isinstance(raw_attachment_id, str)
+            or not raw_attachment_id.strip()
+        ):
+            raise GmailClientError(
+                "Gmail returned an invalid attachment ID"
+            )
+
+        attachment_id = (
+            raw_attachment_id.strip()
+        )
+    else:
+        attachment_id = None
+
+    raw_parts = raw_part.get(
+        "parts",
+        [],
+    )
+
+    if not isinstance(raw_parts, list):
+        raise GmailClientError(
+            "Gmail returned invalid nested MIME parts"
+        )
+
+    parts = tuple(
+        _parse_mime_part(
+            child,
+            depth=depth + 1,
+            max_depth=max_depth,
+            part_counter=part_counter,
+            max_parts=max_parts,
+        )
+        for child in raw_parts
+    )
+
+    normalized_filename = (
+        raw_filename.strip() or None
+    )
+
+    return GmailMimePart(
+        mime_type=(
+            raw_mime_type.strip().casefold()
+        ),
+        filename=normalized_filename,
+        headers=tuple(headers),
+        body_size=raw_size,
+        body_data=raw_data,
+        attachment_id=attachment_id,
+        parts=parts,
+    )
 
 class GmailClient:
     """
@@ -54,6 +257,8 @@ class GmailClient:
     """
 
     MAX_TOTAL_RESULTS = 10_000
+    MAX_MIME_DEPTH = 20
+    MAX_MIME_PARTS = 500
 
     MESSAGE_METADATA_HEADERS = (
         "From",
@@ -419,4 +624,199 @@ class GmailClient:
                 headers.get("auto-submitted")
                 or None
             ),
+        )
+
+    def get_full_message(
+        self,
+        message_id: str,
+        user_id: str = "me",
+    ) -> GmailFullMessage:
+        """Retrieve and validate one complete Gmail message."""
+
+        if (
+            not isinstance(message_id, str)
+            or not message_id.strip()
+        ):
+            raise GmailClientError(
+                "message_id is required"
+            )
+
+        if (
+            not isinstance(user_id, str)
+            or not user_id.strip()
+        ):
+            raise GmailClientError(
+                "user_id is required"
+            )
+
+        normalized_message_id = (
+            message_id.strip()
+        )
+        normalized_user_id = user_id.strip()
+
+        try:
+            response = self.messages.get_message(
+                message_id=normalized_message_id,
+                user_id=normalized_user_id,
+                message_format="full",
+            )
+        except MessagesClientError as exc:
+            self.logger.error(
+                "Gmail full message retrieval failed"
+            )
+            raise GmailClientError(
+                "Failed to retrieve Gmail full message"
+            ) from exc
+        except Exception as exc:
+            self.logger.error(
+                "Gmail full message retrieval failed: "
+                f"{type(exc).__name__}"
+            )
+            raise GmailClientError(
+                "Failed to retrieve Gmail full message"
+            ) from exc
+
+        if not isinstance(response, dict):
+            raise GmailClientError(
+                "Gmail returned an invalid full message"
+            )
+
+        raw_message_id = response.get("id")
+        raw_thread_id = response.get(
+            "threadId"
+        )
+
+        if (
+            not isinstance(raw_message_id, str)
+            or not raw_message_id.strip()
+            or raw_message_id.strip()
+            != normalized_message_id
+        ):
+            raise GmailClientError(
+                "Gmail returned an inconsistent message ID"
+            )
+
+        if (
+            not isinstance(raw_thread_id, str)
+            or not raw_thread_id.strip()
+        ):
+            raise GmailClientError(
+                "Gmail returned an invalid thread ID"
+            )
+
+        raw_payload = response.get(
+            "payload"
+        )
+
+        part_counter = [0]
+
+        root_part = _parse_mime_part(
+            raw_payload,
+            depth=0,
+            max_depth=self.MAX_MIME_DEPTH,
+            part_counter=part_counter,
+            max_parts=self.MAX_MIME_PARTS,
+        )
+
+        return GmailFullMessage(
+            message_id=normalized_message_id,
+            thread_id=raw_thread_id.strip(),
+            root_part=root_part,
+        )
+
+    def get_attachment_data(
+        self,
+        message_id: str,
+        attachment_id: str,
+        user_id: str = "me",
+    ) -> GmailAttachmentData:
+        """Retrieve and validate encoded attachment data."""
+
+        if (
+            not isinstance(message_id, str)
+            or not message_id.strip()
+        ):
+            raise GmailClientError(
+                "message_id is required"
+            )
+
+        if (
+            not isinstance(attachment_id, str)
+            or not attachment_id.strip()
+        ):
+            raise GmailClientError(
+                "attachment_id is required"
+            )
+
+        if (
+            not isinstance(user_id, str)
+            or not user_id.strip()
+        ):
+            raise GmailClientError(
+                "user_id is required"
+            )
+
+        normalized_message_id = (
+            message_id.strip()
+        )
+        normalized_attachment_id = (
+            attachment_id.strip()
+        )
+        normalized_user_id = user_id.strip()
+
+        try:
+            response = self.messages.get_attachment(
+                message_id=normalized_message_id,
+                attachment_id=(
+                    normalized_attachment_id
+                ),
+                user_id=normalized_user_id,
+            )
+        except MessagesClientError as exc:
+            self.logger.error(
+                "Gmail attachment retrieval failed"
+            )
+            raise GmailClientError(
+                "Failed to retrieve Gmail attachment"
+            ) from exc
+        except Exception as exc:
+            self.logger.error(
+                "Gmail attachment retrieval failed: "
+                f"{type(exc).__name__}"
+            )
+            raise GmailClientError(
+                "Failed to retrieve Gmail attachment"
+            ) from exc
+
+        if not isinstance(response, dict):
+            raise GmailClientError(
+                "Gmail returned invalid attachment data"
+            )
+
+        raw_size = response.get("size")
+        raw_data = response.get("data")
+
+        if (
+            isinstance(raw_size, bool)
+            or not isinstance(raw_size, int)
+            or raw_size < 0
+        ):
+            raise GmailClientError(
+                "Gmail returned an invalid attachment size"
+            )
+
+        if (
+            not isinstance(raw_data, str)
+            or (
+                raw_size > 0
+                and not raw_data.strip()
+            )
+        ):
+            raise GmailClientError(
+                "Gmail returned invalid attachment content"
+            )
+
+        return GmailAttachmentData(
+            size=raw_size,
+            encoded_data=raw_data.strip(),
         )

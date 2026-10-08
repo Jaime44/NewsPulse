@@ -33,6 +33,16 @@ class MessagesClientTests(unittest.TestCase):
             .get
             .return_value
         )
+        self.attachments_api = (
+            self.messages_api
+            .attachments
+            .return_value
+        )
+        self.attachment_request = (
+            self.attachments_api
+            .get
+            .return_value
+        )
         self.client = MessagesClient(self.service)
         self.client.logger = Mock()
 
@@ -365,6 +375,162 @@ class MessagesClientTests(unittest.TestCase):
         self.assertNotIn(
             "sensitive-runtime-value",
             log_message,
+        )
+
+    def test_get_attachment_forwards_identifiers(
+        self,
+    ) -> None:
+        response = {
+            "size": 12,
+            "data": "encoded-data",
+        }
+        self.attachment_request.execute.return_value = (
+            response
+        )
+
+        result = self.client.get_attachment(
+            message_id=" message-1 ",
+            attachment_id=" attachment-1 ",
+            user_id=" me ",
+        )
+
+        self.assertEqual(
+            result,
+            response,
+        )
+        self.attachments_api.get.assert_called_once_with(
+            userId="me",
+            messageId="message-1",
+            id="attachment-1",
+        )
+
+    def test_get_attachment_rejects_invalid_identifiers(
+        self,
+    ) -> None:
+        invalid_arguments = (
+            {
+                "message_id": "",
+                "attachment_id": "attachment-1",
+            },
+            {
+                "message_id": None,
+                "attachment_id": "attachment-1",
+            },
+            {
+                "message_id": "message-1",
+                "attachment_id": "",
+            },
+            {
+                "message_id": "message-1",
+                "attachment_id": None,
+            },
+            {
+                "message_id": "message-1",
+                "attachment_id": "attachment-1",
+                "user_id": " ",
+            },
+        )
+
+        for arguments in invalid_arguments:
+            with self.subTest(
+                arguments=arguments
+            ):
+                with self.assertRaises(
+                    MessagesClientError
+                ):
+                    self.client.get_attachment(
+                        **arguments
+                    )
+
+        self.attachments_api.get.assert_not_called()
+
+    def test_get_attachment_http_error_is_sanitized(
+        self,
+    ) -> None:
+        http_error = HttpError(
+            Response({"status": "404"}),
+            (
+                b'{"error":{"message":'
+                b'"sensitive-provider-message"}}'
+            ),
+        )
+        self.attachment_request.execute.side_effect = (
+            http_error
+        )
+
+        with self.assertRaises(
+            MessagesClientError
+        ) as raised:
+            self.client.get_attachment(
+                "message-1",
+                "attachment-1",
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Failed to retrieve "
+                "Gmail attachment"
+            ),
+        )
+
+        logged_message = (
+            self.client
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertIn(
+            "404",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-provider-message",
+            logged_message,
+        )
+
+    def test_get_attachment_unexpected_error_is_sanitized(
+        self,
+    ) -> None:
+        self.attachment_request.execute.side_effect = (
+            RuntimeError(
+                "sensitive-runtime-value"
+            )
+        )
+
+        with self.assertRaises(
+            MessagesClientError
+        ) as raised:
+            self.client.get_attachment(
+                "message-1",
+                "attachment-1",
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Failed to retrieve "
+                "Gmail attachment"
+            ),
+        )
+
+        logged_message = (
+            self.client
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertIn(
+            "RuntimeError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-runtime-value",
+            logged_message,
         )
 
 if __name__ == "__main__":

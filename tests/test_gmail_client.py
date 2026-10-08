@@ -5,11 +5,14 @@ import unittest
 from unittest.mock import Mock, call
 
 from app.tools.gmail.gmail_client import (
+    GmailAttachmentData,
     GmailClient,
     GmailClientError,
+    GmailFullMessage,
     GmailListingLimitReached,
     GmailMessageMetadata,
     GmailMessageReference,
+    GmailMimePart,
 )
 from app.tools.gmail.messages_client import (
     MessagesClientError,
@@ -718,6 +721,592 @@ class GmailClientMetadataTests(unittest.TestCase):
         self.assertNotIn(
             "sensitive-runtime-value",
             logged_value,
+        )
+
+class GmailClientFullMessageTests(
+    unittest.TestCase
+):
+    def setUp(self) -> None:
+        self.client = GmailClient.__new__(
+            GmailClient
+        )
+        self.client.messages = Mock()
+        self.client.logger = Mock()
+
+        self.get_message = (
+            self.client
+            .messages
+            .get_message
+        )
+
+    def test_valid_full_message_returns_typed_tree(
+        self,
+    ) -> None:
+        self.get_message.return_value = {
+            "id": "message-1",
+            "threadId": "thread-1",
+            "payload": {
+                "mimeType": "multipart/alternative",
+                "filename": "",
+                "headers": [
+                    {
+                        "name": "Content-Type",
+                        "value": (
+                            "multipart/alternative"
+                        ),
+                    }
+                ],
+                "body": {
+                    "size": 0,
+                },
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "filename": "",
+                        "headers": [],
+                        "body": {
+                            "size": 4,
+                            "data": "SG9sYQ==",
+                        },
+                    },
+                    {
+                        "mimeType": "text/html",
+                        "filename": "",
+                        "headers": [],
+                        "body": {
+                            "size": 20,
+                            "attachmentId": (
+                                "attachment-1"
+                            ),
+                        },
+                    },
+                ],
+            },
+        }
+
+        result = self.client.get_full_message(
+            "message-1"
+        )
+
+        self.assertEqual(
+            result,
+            GmailFullMessage(
+                message_id="message-1",
+                thread_id="thread-1",
+                root_part=GmailMimePart(
+                    mime_type=(
+                        "multipart/alternative"
+                    ),
+                    filename=None,
+                    headers=(
+                        (
+                            "content-type",
+                            "multipart/alternative",
+                        ),
+                    ),
+                    body_size=0,
+                    body_data=None,
+                    attachment_id=None,
+                    parts=(
+                        GmailMimePart(
+                            mime_type="text/plain",
+                            filename=None,
+                            headers=(),
+                            body_size=4,
+                            body_data="SG9sYQ==",
+                            attachment_id=None,
+                            parts=(),
+                        ),
+                        GmailMimePart(
+                            mime_type="text/html",
+                            filename=None,
+                            headers=(),
+                            body_size=20,
+                            body_data=None,
+                            attachment_id=(
+                                "attachment-1"
+                            ),
+                            parts=(),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        self.get_message.assert_called_once_with(
+            message_id="message-1",
+            user_id="me",
+            message_format="full",
+        )
+
+    def test_full_message_rejects_invalid_request_values(
+        self,
+    ) -> None:
+        invalid_arguments = (
+            {
+                "message_id": "",
+            },
+            {
+                "message_id": None,
+            },
+            {
+                "message_id": "message-1",
+                "user_id": "",
+            },
+            {
+                "message_id": "message-1",
+                "user_id": None,
+            },
+        )
+
+        for arguments in invalid_arguments:
+            with self.subTest(
+                arguments=arguments
+            ):
+                with self.assertRaises(
+                    GmailClientError
+                ):
+                    self.client.get_full_message(
+                        **arguments
+                    )
+
+        self.get_message.assert_not_called()
+
+    def test_invalid_full_messages_are_rejected(
+        self,
+    ) -> None:
+        valid_part = {
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [],
+            "body": {
+                "size": 4,
+                "data": "SG9sYQ==",
+            },
+        }
+        valid_response = {
+            "id": "message-1",
+            "threadId": "thread-1",
+            "payload": valid_part,
+        }
+
+        invalid_responses = (
+            None,
+            {},
+            {
+                **valid_response,
+                "id": "different-message",
+            },
+            {
+                **valid_response,
+                "threadId": "",
+            },
+            {
+                **valid_response,
+                "payload": None,
+            },
+            {
+                **valid_response,
+                "payload": {
+                    **valid_part,
+                    "mimeType": "",
+                },
+            },
+            {
+                **valid_response,
+                "payload": {
+                    **valid_part,
+                    "headers": {},
+                },
+            },
+            {
+                **valid_response,
+                "payload": {
+                    **valid_part,
+                    "body": {
+                        "size": -1,
+                    },
+                },
+            },
+            {
+                **valid_response,
+                "payload": {
+                    **valid_part,
+                    "parts": {},
+                },
+            },
+            {
+                **valid_response,
+                "payload": {
+                    **valid_part,
+                    "parts": [None],
+                },
+            },
+        )
+
+        for invalid_response in invalid_responses:
+            with self.subTest(
+                response=invalid_response
+            ):
+                self.get_message.reset_mock()
+                self.get_message.side_effect = None
+                self.get_message.return_value = (
+                    invalid_response
+                )
+
+                with self.assertRaises(
+                    GmailClientError
+                ):
+                    self.client.get_full_message(
+                        "message-1"
+                    )
+
+    def test_full_message_enforces_mime_limits(
+        self,
+    ) -> None:
+        leaf = {
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [],
+            "body": {
+                "size": 0,
+            },
+        }
+
+        deep_payload = leaf
+
+        for _ in range(
+            GmailClient.MAX_MIME_DEPTH + 1
+        ):
+            deep_payload = {
+                "mimeType": "multipart/mixed",
+                "filename": "",
+                "headers": [],
+                "body": {
+                    "size": 0,
+                },
+                "parts": [
+                    deep_payload,
+                ],
+            }
+
+        excessive_parts_payload = {
+            "mimeType": "multipart/mixed",
+            "filename": "",
+            "headers": [],
+            "body": {
+                "size": 0,
+            },
+            "parts": [
+                leaf
+                for _ in range(
+                    GmailClient.MAX_MIME_PARTS
+                )
+            ],
+        }
+
+        invalid_payloads = (
+            deep_payload,
+            excessive_parts_payload,
+        )
+
+        for payload in invalid_payloads:
+            with self.subTest():
+                self.get_message.reset_mock()
+                self.get_message.return_value = {
+                    "id": "message-1",
+                    "threadId": "thread-1",
+                    "payload": payload,
+                }
+
+                with self.assertRaises(
+                    GmailClientError
+                ):
+                    self.client.get_full_message(
+                        "message-1"
+                    )
+
+    def test_full_message_lower_error_is_sanitized(
+        self,
+    ) -> None:
+        self.get_message.side_effect = (
+            MessagesClientError(
+                "sensitive-lower-level-value"
+            )
+        )
+
+        with self.assertRaises(
+            GmailClientError
+        ) as raised:
+            self.client.get_full_message(
+                "message-1"
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Failed to retrieve "
+                "Gmail full message"
+            ),
+        )
+
+        logged_message = (
+            self.client
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertNotIn(
+            "sensitive-lower-level-value",
+            logged_message,
+        )
+
+    def test_full_message_unexpected_error_is_sanitized(
+        self,
+    ) -> None:
+        self.get_message.side_effect = RuntimeError(
+            "sensitive-runtime-value"
+        )
+
+        with self.assertRaises(
+            GmailClientError
+        ) as raised:
+            self.client.get_full_message(
+                "message-1"
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Failed to retrieve "
+                "Gmail full message"
+            ),
+        )
+
+        logged_message = (
+            self.client
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertIn(
+            "RuntimeError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-runtime-value",
+            logged_message,
+        )
+
+class GmailClientAttachmentDataTests(
+    unittest.TestCase
+):
+    def setUp(self) -> None:
+        self.client = GmailClient.__new__(
+            GmailClient
+        )
+        self.client.messages = Mock()
+        self.client.logger = Mock()
+
+        self.get_attachment = (
+            self.client
+            .messages
+            .get_attachment
+        )
+
+    def test_valid_attachment_returns_typed_data(
+        self,
+    ) -> None:
+        self.get_attachment.return_value = {
+            "size": 4,
+            "data": "SG9sYQ==",
+        }
+
+        result = self.client.get_attachment_data(
+            message_id=" message-1 ",
+            attachment_id=" attachment-1 ",
+            user_id=" me ",
+        )
+
+        self.assertEqual(
+            result,
+            GmailAttachmentData(
+                size=4,
+                encoded_data="SG9sYQ==",
+            ),
+        )
+        self.get_attachment.assert_called_once_with(
+            message_id="message-1",
+            attachment_id="attachment-1",
+            user_id="me",
+        )
+
+    def test_attachment_rejects_invalid_request_values(
+        self,
+    ) -> None:
+        invalid_arguments = (
+            {
+                "message_id": "",
+                "attachment_id": "attachment-1",
+            },
+            {
+                "message_id": None,
+                "attachment_id": "attachment-1",
+            },
+            {
+                "message_id": "message-1",
+                "attachment_id": "",
+            },
+            {
+                "message_id": "message-1",
+                "attachment_id": None,
+            },
+            {
+                "message_id": "message-1",
+                "attachment_id": "attachment-1",
+                "user_id": "",
+            },
+        )
+
+        for arguments in invalid_arguments:
+            with self.subTest(
+                arguments=arguments
+            ):
+                with self.assertRaises(
+                    GmailClientError
+                ):
+                    self.client.get_attachment_data(
+                        **arguments
+                    )
+
+        self.get_attachment.assert_not_called()
+
+    def test_invalid_attachment_responses_are_rejected(
+        self,
+    ) -> None:
+        invalid_responses = (
+            None,
+            {},
+            {
+                "size": True,
+                "data": "SG9sYQ==",
+            },
+            {
+                "size": -1,
+                "data": "SG9sYQ==",
+            },
+            {
+                "size": 4,
+                "data": None,
+            },
+            {
+                "size": 4,
+                "data": " ",
+            },
+            {
+                "size": 4,
+                "data": 123,
+            },
+        )
+
+        for invalid_response in invalid_responses:
+            with self.subTest(
+                response=invalid_response
+            ):
+                self.get_attachment.reset_mock()
+                self.get_attachment.side_effect = None
+                self.get_attachment.return_value = (
+                    invalid_response
+                )
+
+                with self.assertRaises(
+                    GmailClientError
+                ):
+                    self.client.get_attachment_data(
+                        "message-1",
+                        "attachment-1",
+                    )
+
+    def test_attachment_lower_error_is_sanitized(
+        self,
+    ) -> None:
+        self.get_attachment.side_effect = (
+            MessagesClientError(
+                "sensitive-lower-level-value"
+            )
+        )
+
+        with self.assertRaises(
+            GmailClientError
+        ) as raised:
+            self.client.get_attachment_data(
+                "message-1",
+                "attachment-1",
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Failed to retrieve "
+                "Gmail attachment"
+            ),
+        )
+
+        logged_message = (
+            self.client
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertNotIn(
+            "sensitive-lower-level-value",
+            logged_message,
+        )
+
+    def test_attachment_unexpected_error_is_sanitized(
+        self,
+    ) -> None:
+        self.get_attachment.side_effect = RuntimeError(
+            "sensitive-runtime-value"
+        )
+
+        with self.assertRaises(
+            GmailClientError
+        ) as raised:
+            self.client.get_attachment_data(
+                "message-1",
+                "attachment-1",
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Failed to retrieve "
+                "Gmail attachment"
+            ),
+        )
+
+        logged_message = (
+            self.client
+            .logger
+            .error
+            .call_args
+            .args[0]
+        )
+
+        self.assertIn(
+            "RuntimeError",
+            logged_message,
+        )
+        self.assertNotIn(
+            "sensitive-runtime-value",
+            logged_message,
         )
 
 if __name__ == "__main__":
