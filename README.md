@@ -1,11 +1,14 @@
 # NewsPulse
 
-NewsPulse es una aplicación personal que conecta una cuenta de Gmail y
-prepara la base para recopilar, clasificar y resumir newsletters.
+NewsPulse es una aplicación personal que conecta una cuenta de Gmail,
+detecta newsletters nuevas y conserva su contenido legible para las
+siguientes etapas de generación del correo maestro.
 
 ## Estado del proyecto
 
-El bloque P0 estabiliza la autenticación y el acceso seguro a Gmail.
+P0 estabilizó la autenticación, la configuración y el acceso seguro a
+Gmail. P1 dispone ya de ingestión incremental, clasificación y
+extracción de contenido.
 
 Actualmente están implementados:
 
@@ -15,20 +18,25 @@ Actualmente están implementados:
 - Persistencia cifrada de credenciales OAuth con Fernet y SQLite.
 - Renovación automática de credenciales caducadas.
 - Sesión firmada con un identificador monousuario.
-- Consulta del perfil de Gmail.
-- Listado básico de mensajes.
+- Consulta del perfil y listado básico de mensajes Gmail.
+- Ingestión incremental desde el comienzo de uso de la aplicación.
+- Clasificación explicable de newsletters mediante metadatos.
+- Reglas configurables por remitente, dominio, `List-Id` y etiqueta.
+- Gestión web de fuentes incluidas y excluidas.
+- Descarga segura y recursiva del contenido MIME.
+- Extracción de texto legible y enlaces HTTP o HTTPS.
+- Persistencia local del contenido con estados y reintentos.
+- Purga automática del contenido al finalizar su retención.
 - Logout mediante `POST`.
-- Pruebas unitarias y de rutas Flask.
+- Pruebas unitarias, de integración y de rutas Flask.
 
 Todavía no están implementados:
 
-- Detección de newsletters.
-- Procesamiento incremental de mensajes.
 - Traducción y resumen mediante IA.
 - Generación de imágenes.
-- Correo maestro semanal.
-- Retención automática de datos.
-- Programación y despliegue de producción.
+- Construcción y envío del correo maestro.
+- Programación periódica de la ejecución.
+- Despliegue de producción.
 
 ## Requisitos
 
@@ -46,13 +54,34 @@ app/config.py
     Configuración centralizada y validación del entorno.
 
 app/backend/web_app.py
-    Aplicación Flask, rutas OAuth, sesión y endpoints Gmail.
+    Aplicación Flask, rutas OAuth, sesión y endpoints.
 
 app/backend/bd/db.py
-    Inicialización y conexiones SQLite.
+    Inicialización y esquema SQLite.
 
 app/backend/bd/oauth_store.py
     Cifrado y persistencia de credenciales OAuth.
+
+app/backend/bd/ingestion_store.py
+    Cursor incremental, mensajes, clasificaciones y estados.
+
+app/backend/bd/newsletter_source_store.py
+    Reglas configurables de inclusión y exclusión.
+
+app/backend/bd/message_content_store.py
+    Contenido legible, enlaces y fechas de caducidad.
+
+app/backend/services/gmail_ingestion.py
+    Coordinación del escaneo, clasificación y procesamiento.
+
+app/backend/services/message_content.py
+    Descarga y decodificación segura de contenido MIME.
+
+app/backend/services/content_parser.py
+    Selección de texto legible y normalización de enlaces.
+
+app/backend/services/message_content_processing.py
+    Pipeline de decodificación, parsing y persistencia.
 
 app/backend/services/oauth_credentials.py
     Validación, renovación y revocación de credenciales.
@@ -61,7 +90,7 @@ app/frontend/templates/
     Pantallas de inicio y dashboard.
 
 tests/
-    Pruebas del almacenamiento, renovación OAuth y rutas Flask.
+    Pruebas unitarias, de integración, almacenamiento y rutas Flask.
 ```
 
 ## Instalación local
@@ -133,7 +162,7 @@ Las variables admitidas están definidas en `.env.example`.
 | `FLASK_SECRET_KEY_PATH` | Archivo con la clave que firma la sesión Flask. |
 | `TOKEN_ENCRYPTION_KEY_PATH` | Archivo con la clave Fernet. |
 | `DATABASE_PATH` | Ruta de la base SQLite local. |
-| `RETENTION_DAYS` | Retención prevista. Se valida, pero todavía no se ejecuta automáticamente. |
+| `RETENTION_DAYS` | Días que se conservan el texto y los enlaces extraídos. La purga se ejecuta al inicio de cada escaneo. |
 
 Ejemplo de rutas locales:
 
@@ -227,6 +256,10 @@ La sesión contiene únicamente:
 | `GET` | `/dashboard` | Dashboard autenticado. |
 | `GET` | `/api/gmail/profile` | Consulta el perfil Gmail. |
 | `GET` | `/api/gmail/messages` | Lista hasta diez mensajes. |
+| `GET` | `/api/newsletter-sources` | Lista las reglas de newsletters. |
+| `POST` | `/api/newsletter-sources` | Crea o actualiza una regla. |
+| `POST` | `/api/newsletter-sources/deactivate` | Desactiva una regla. |
+| `POST` | `/api/ingestion/scan` | Ejecuta un escaneo incremental protegido. |
 | `POST` | `/logout` | Elimina la sesión del navegador. |
 
 Logout elimina la sesión local, pero no borra ni revoca las
@@ -259,26 +292,31 @@ myvenv/bin/python -m unittest discover -s tests -v
 
 La suite actual cubre:
 
-- Cifrado y descifrado de credenciales.
-- Renovación y revocación OAuth.
-- Errores temporales.
-- Inicio y callback OAuth.
-- Validación de `state`.
+- Cifrado, descifrado, renovación y revocación OAuth.
+- Inicio y callback OAuth con validación de `state`.
 - Sesión firmada y cuenta monousuario.
 - Perfil y mensajes Gmail simulados.
-- Logout mediante `POST`.
+- Cursor incremental y recuperación tras fallos parciales.
+- Clasificación heurística y reglas configurables.
+- Gestión web de fuentes de newsletters.
+- Árboles MIME, adjuntos textuales y límites de tamaño.
+- Parsing de texto plano y HTML.
+- Normalización y deduplicación de enlaces.
+- Persistencia, reintentos y estados de procesamiento.
+- Retención y purga automática del contenido.
+- Recorrido integral desde Gmail simulado hasta SQLite.
+- Endpoints Flask y logout mediante `POST`.
 
 Las pruebas no llaman realmente a Google ni utilizan secretos reales.
 
 ## Próxima fase
 
-P1 implementará el procesamiento incremental de newsletters:
+Los siguientes bloques de P1 completarán el correo maestro:
 
-1. Registrar el momento inicial de uso.
-2. Consultar mensajes nuevos.
-3. Detectar newsletters mediante reglas configurables.
-4. Extraer texto y enlaces.
-5. Traducir y resumir al español.
-6. Generar una imagen por contenido.
-7. Construir y enviar el correo maestro.
-8. Aplicar la retención configurada de 30 días.
+1. Traducir el contenido al español cuando sea necesario.
+2. Resumir y sintetizar cada newsletter.
+3. Generar una imagen representativa.
+4. Construir el diseño HTML del correo maestro.
+5. Enviar el resultado al mismo Gmail autenticado.
+6. Programar la ejecución en la zona `Europe/Madrid`.
+7. Definir y preparar el despliegue de producción.

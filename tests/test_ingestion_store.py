@@ -687,5 +687,262 @@ class IngestionStoreTests(unittest.TestCase):
             )
         )
 
+    def test_message_processing_lifecycle_can_be_retried(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        first_processing_at = (
+            STARTED_AT
+            + timedelta(minutes=1)
+        )
+        failed_at = (
+            STARTED_AT
+            + timedelta(minutes=2)
+        )
+        retry_processing_at = (
+            STARTED_AT
+            + timedelta(minutes=3)
+        )
+        completed_at = (
+            STARTED_AT
+            + timedelta(minutes=4)
+        )
+
+        processing_message = (
+            self.store.mark_message_processing(
+                "gmail-message-1",
+                started_at=first_processing_at,
+            )
+        )
+
+        self.assertEqual(
+            processing_message.status,
+            "processing",
+        )
+        self.assertEqual(
+            processing_message.updated_at,
+            first_processing_at,
+        )
+        self.assertIsNone(
+            processing_message.processed_at
+        )
+        self.assertIsNone(
+            processing_message.last_error_code
+        )
+
+        failed_message = (
+            self.store.mark_message_failed(
+                "gmail-message-1",
+                error_code=(
+                    "content_processing_failed"
+                ),
+                failed_at=failed_at,
+            )
+        )
+
+        self.assertEqual(
+            failed_message.status,
+            "failed",
+        )
+        self.assertEqual(
+            failed_message.updated_at,
+            failed_at,
+        )
+        self.assertIsNone(
+            failed_message.processed_at
+        )
+        self.assertEqual(
+            failed_message.last_error_code,
+            "content_processing_failed",
+        )
+
+        retry_message = (
+            self.store.mark_message_processing(
+                "gmail-message-1",
+                started_at=retry_processing_at,
+            )
+        )
+
+        self.assertEqual(
+            retry_message.status,
+            "processing",
+        )
+        self.assertEqual(
+            retry_message.updated_at,
+            retry_processing_at,
+        )
+        self.assertIsNone(
+            retry_message.processed_at
+        )
+        self.assertIsNone(
+            retry_message.last_error_code
+        )
+
+        completed_message = (
+            self.store.mark_message_processed(
+                "gmail-message-1",
+                completed_at=completed_at,
+            )
+        )
+
+        stored_message = self.store.load_message(
+            "gmail-message-1"
+        )
+
+        self.assertEqual(
+            completed_message.status,
+            "processed",
+        )
+        self.assertEqual(
+            completed_message.updated_at,
+            completed_at,
+        )
+        self.assertEqual(
+            completed_message.processed_at,
+            completed_at,
+        )
+        self.assertIsNone(
+            completed_message.last_error_code
+        )
+        self.assertEqual(
+            stored_message,
+            completed_message,
+        )
+
+    def test_processing_status_requires_registered_message(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.mark_message_processing(
+                "unknown-message",
+                started_at=STARTED_AT,
+            )
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.mark_message_processed(
+                "unknown-message",
+                completed_at=STARTED_AT,
+            )
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.mark_message_failed(
+                "unknown-message",
+                error_code=(
+                    "content_processing_failed"
+                ),
+                failed_at=STARTED_AT,
+            )
+
+    def test_failed_status_requires_safe_error_code(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        invalid_error_codes = (
+            "",
+            "   ",
+            None,
+            "x" * 101,
+        )
+
+        for error_code in invalid_error_codes:
+            with self.subTest(
+                error_code=error_code
+            ):
+                with self.assertRaises(
+                    IngestionStoreError
+                ):
+                    self.store.mark_message_failed(
+                        "gmail-message-1",
+                        error_code=error_code,
+                        failed_at=STARTED_AT,
+                    )
+
+        stored_message = self.store.load_message(
+            "gmail-message-1"
+        )
+
+        self.assertIsNotNone(
+            stored_message
+        )
+        assert stored_message is not None
+        self.assertEqual(
+            stored_message.status,
+            "discovered",
+        )
+        self.assertIsNone(
+            stored_message.last_error_code
+        )
+
+    def test_processing_timestamps_require_timezone(
+        self,
+    ) -> None:
+        self.prepare_ingestion()
+
+        self.store.register_message(
+            gmail_message_id="gmail-message-1",
+            gmail_thread_id="gmail-thread-1",
+            internal_date_ms=1_757_721_600_000,
+            discovered_at=STARTED_AT,
+        )
+
+        naive_timestamp = datetime(
+            2026,
+            9,
+            13,
+            10,
+            0,
+        )
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.mark_message_processing(
+                "gmail-message-1",
+                started_at=naive_timestamp,
+            )
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.mark_message_processed(
+                "gmail-message-1",
+                completed_at=naive_timestamp,
+            )
+
+        with self.assertRaises(
+            IngestionStoreError
+        ):
+            self.store.mark_message_failed(
+                "gmail-message-1",
+                error_code=(
+                    "content_processing_failed"
+                ),
+                failed_at=naive_timestamp,
+            )
+
 if __name__ == "__main__":
     unittest.main()

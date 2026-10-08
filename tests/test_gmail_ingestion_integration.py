@@ -169,6 +169,7 @@ class GmailIngestionIntegrationTests(
             classification_service=(
                 self.classification_service
             ),
+            content_processing_service=Mock(),
             clock=lambda: scan_time,
         )
         service.logger = Mock()

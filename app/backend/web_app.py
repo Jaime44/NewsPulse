@@ -771,6 +771,9 @@ def run_gmail_ingestion():
             build_gmail_ingestion_service(
                 gmail_service=gmail_service,
                 database=database,
+                retention_days=(
+                    settings.retention_days
+                ),
             )
         )
 

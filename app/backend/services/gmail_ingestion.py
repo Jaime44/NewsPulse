@@ -11,6 +11,10 @@ from app.backend.bd.ingestion_store import (
 from app.backend.services.classifier import (
     NewsletterVerdict,
 )
+from app.backend.services.message_content_processing import (
+    MessageContentProcessingError,
+    MessageContentProcessingService,
+)
 from app.backend.services.newsletter_classification import (
     CLASSIFIER_VERSION,
     NewsletterClassificationService,
@@ -72,12 +76,18 @@ class GmailIngestionService:
         classification_service: (
             NewsletterClassificationService
         ),
+        content_processing_service: (
+            MessageContentProcessingService
+        ),
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self.gmail_client = gmail_client
         self.store = store
         self.classification_service = (
             classification_service
+        )
+        self.content_processing_service = (
+            content_processing_service
         )
         self.clock = clock
         self.logger = AppLogger(
@@ -99,6 +109,44 @@ class GmailIngestionService:
 
         return f"after:{epoch_seconds}"
 
+    def _process_newsletter_content(
+        self,
+        gmail_message_id: str,
+        *,
+        user_id: str,
+        processing_at: datetime,
+    ) -> None:
+        """Process one newsletter with retryable state transitions."""
+
+        self.store.mark_message_processing(
+            gmail_message_id,
+            started_at=processing_at,
+        )
+
+        try:
+            (
+                self.content_processing_service
+                .process_message(
+                    gmail_message_id,
+                    user_id=user_id,
+                    extracted_at=processing_at,
+                )
+            )
+        except MessageContentProcessingError:
+            self.store.mark_message_failed(
+                gmail_message_id,
+                error_code=(
+                    "content_processing_failed"
+                ),
+                failed_at=processing_at,
+            )
+            raise
+
+        self.store.mark_message_processed(
+            gmail_message_id,
+            completed_at=processing_at,
+        )
+
     def scan(
         self,
         user_id: str = "me",
@@ -113,6 +161,13 @@ class GmailIngestionService:
         )
 
         try:
+            (
+                self.content_processing_service
+                .purge_expired(
+                    expired_at=scan_started_at
+                )
+            )
+
             state = self.store.get_or_create_state(
                 started_at=scan_started_at
             )
@@ -160,6 +215,35 @@ class GmailIngestionService:
 
                 if stored_classification is not None:
                     already_known_count += 1
+
+                    if (
+                        stored_classification.verdict
+                        == "newsletter"
+                    ):
+                        stored_message = (
+                            self.store.load_message(
+                                reference.message_id
+                            )
+                        )
+
+                        if stored_message is None:
+                            raise IngestionStoreError(
+                                "Stored classification has "
+                                "no registered Gmail message"
+                            )
+
+                        if (
+                            stored_message.status
+                            != "processed"
+                        ):
+                            self._process_newsletter_content(
+                                reference.message_id,
+                                user_id=user_id,
+                                processing_at=(
+                                    scan_started_at
+                                ),
+                            )
+
                     continue
 
                 message_was_known = (
@@ -246,6 +330,14 @@ class GmailIngestionService:
                     is NewsletterVerdict.NEWSLETTER
                 ):
                     newsletter_count += 1
+
+                    self._process_newsletter_content(
+                        metadata.message_id,
+                        user_id=user_id,
+                        processing_at=(
+                            scan_started_at
+                        ),
+                    )
                 elif (
                     classification.verdict
                     is NewsletterVerdict.REVIEW
@@ -294,6 +386,7 @@ class GmailIngestionService:
         except (
             GmailClientError,
             IngestionStoreError,
+            MessageContentProcessingError,
         ) as exc:
             self.logger.error(
                 "Gmail ingestion scan failed: "

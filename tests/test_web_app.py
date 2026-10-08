@@ -1645,6 +1645,7 @@ class GmailRouteTests(unittest.TestCase):
         build_ingestion.assert_called_once_with(
             gmail_service=gmail_service,
             database=self.web_app.database,
+            retention_days=30,
         )
         ingestion_service.scan.assert_called_once_with(
             user_id="me",

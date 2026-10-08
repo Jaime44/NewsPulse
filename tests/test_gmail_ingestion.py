@@ -55,6 +55,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
         self.gmail_client = Mock()
         self.store = Mock()
         self.classification_service = Mock()
+        self.content_processing_service = Mock()
 
         (
             self.store
@@ -113,6 +114,9 @@ class GmailIngestionServiceTests(unittest.TestCase):
             store=self.store,
             classification_service=(
                 self.classification_service
+            ),
+            content_processing_service=(
+                self.content_processing_service
             ),
             clock=lambda: SCAN_STARTED_AT,
         )
@@ -380,6 +384,9 @@ class GmailIngestionServiceTests(unittest.TestCase):
             store=self.store,
             classification_service=(
                 self.classification_service
+            ),
+            content_processing_service=(
+                self.content_processing_service
             ),
             clock=lambda: naive_clock,
         )

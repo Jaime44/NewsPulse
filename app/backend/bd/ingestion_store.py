@@ -501,6 +501,170 @@ class IngestionStore:
             gmail_message_id
         ) is not None
 
+    def _update_message_processing_status(
+        self,
+        gmail_message_id: str,
+        *,
+        status: str,
+        changed_at: datetime,
+        processed_at: datetime | None,
+        last_error_code: str | None,
+    ) -> StoredGmailMessage:
+        """Persist one internal message processing transition."""
+
+        message_id = _required_identifier(
+            gmail_message_id,
+            "gmail_message_id",
+        )
+
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE gmail_messages
+                SET status = ?,
+                    updated_at = ?,
+                    processed_at = ?,
+                    last_error_code = ?
+                WHERE account_id = ?
+                  AND gmail_message_id = ?
+                """,
+                (
+                    status,
+                    changed_at.isoformat(),
+                    (
+                        processed_at.isoformat()
+                        if processed_at is not None
+                        else None
+                    ),
+                    last_error_code,
+                    self.ACCOUNT_ID,
+                    message_id,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise IngestionStoreError(
+                    "The Gmail message has not "
+                    "been registered"
+                )
+
+            row = connection.execute(
+                """
+                SELECT
+                    id,
+                    account_id,
+                    gmail_message_id,
+                    gmail_thread_id,
+                    internal_date_ms,
+                    status,
+                    discovered_at,
+                    updated_at,
+                    processed_at,
+                    last_error_code
+                FROM gmail_messages
+                WHERE account_id = ?
+                  AND gmail_message_id = ?
+                """,
+                (
+                    self.ACCOUNT_ID,
+                    message_id,
+                ),
+            ).fetchone()
+
+        if row is None:
+            raise IngestionStoreError(
+                "The Gmail message could not "
+                "be loaded"
+            )
+
+        return _message_from_row(
+            row
+        )
+
+    def mark_message_processing(
+        self,
+        gmail_message_id: str,
+        *,
+        started_at: datetime | None = None,
+    ) -> StoredGmailMessage:
+        """Mark a registered message as currently processing."""
+
+        processing_time = _as_utc(
+            started_at
+            or datetime.now(timezone.utc)
+        )
+
+        return self._update_message_processing_status(
+            gmail_message_id,
+            status="processing",
+            changed_at=processing_time,
+            processed_at=None,
+            last_error_code=None,
+        )
+
+    def mark_message_processed(
+        self,
+        gmail_message_id: str,
+        *,
+        completed_at: datetime | None = None,
+    ) -> StoredGmailMessage:
+        """Mark a registered message as successfully processed."""
+
+        completion_time = _as_utc(
+            completed_at
+            or datetime.now(timezone.utc)
+        )
+
+        return self._update_message_processing_status(
+            gmail_message_id,
+            status="processed",
+            changed_at=completion_time,
+            processed_at=completion_time,
+            last_error_code=None,
+        )
+
+    def mark_message_failed(
+        self,
+        gmail_message_id: str,
+        *,
+        error_code: str,
+        failed_at: datetime | None = None,
+    ) -> StoredGmailMessage:
+        """Mark processing as failed without storing sensitive details."""
+
+        if (
+            not isinstance(error_code, str)
+            or not error_code.strip()
+        ):
+            raise IngestionStoreError(
+                "error_code is required"
+            )
+
+        normalized_error_code = (
+            error_code.strip()
+        )
+
+        if len(normalized_error_code) > 100:
+            raise IngestionStoreError(
+                "error_code must not exceed "
+                "100 characters"
+            )
+
+        failure_time = _as_utc(
+            failed_at
+            or datetime.now(timezone.utc)
+        )
+
+        return self._update_message_processing_status(
+            gmail_message_id,
+            status="failed",
+            changed_at=failure_time,
+            processed_at=None,
+            last_error_code=(
+                normalized_error_code
+            ),
+        )
+
     def save_message_classification(
         self,
         gmail_message_id: str,

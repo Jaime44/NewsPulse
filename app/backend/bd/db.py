@@ -230,7 +230,60 @@ class Database:
                     )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS
+                    message_contents (
+                        gmail_message_row_id INTEGER
+                            PRIMARY KEY,
 
+                        text_content TEXT NOT NULL
+                            CHECK (
+                                length(
+                                    trim(text_content)
+                                ) > 0
+                            ),
+
+                        links_json TEXT NOT NULL
+                            CHECK (
+                                length(
+                                    trim(links_json)
+                                ) > 0
+                            ),
+
+                        source_mime_type TEXT NOT NULL
+                            CHECK (
+                                source_mime_type IN (
+                                    'text/plain',
+                                    'text/html'
+                                )
+                            ),
+
+                        extracted_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+
+                        CHECK (
+                            expires_at > extracted_at
+                        ),
+
+                        FOREIGN KEY (
+                            gmail_message_row_id
+                        )
+                            REFERENCES gmail_messages (id)
+                            ON DELETE CASCADE
+                    )
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                    idx_message_contents_expires_at
+                ON message_contents (
+                    expires_at
+                )
+                """
+            )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS
