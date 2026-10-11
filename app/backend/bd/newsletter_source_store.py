@@ -1,3 +1,10 @@
+"""Persist and normalize newsletter inclusion and exclusion rules.
+
+This module stores single-account rules derived from senders, list identifiers,
+Gmail labels, or domains. It also records whether rules are active and when an
+active rule most recently matched message metadata.
+"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -16,6 +23,8 @@ class NewsletterSourceStoreError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class NewsletterSource:
+    """Represent one persisted newsletter-source decision and its metadata."""
+
     id: int
     account_id: int
     source_type: str
@@ -55,7 +64,17 @@ ORIGINS = frozenset(
 
 
 def _as_utc(value: datetime) -> datetime:
-    """Validate and normalize an aware timestamp to UTC."""
+    """Validate and normalize an aware timestamp to UTC.
+
+    Args:
+        value: Timestamp to normalize.
+
+    Returns:
+        The equivalent timezone-aware UTC timestamp.
+
+    Raises:
+        NewsletterSourceStoreError: If the timestamp is timezone-naive.
+    """
 
     if value.tzinfo is None or value.utcoffset() is None:
         raise NewsletterSourceStoreError(
@@ -67,12 +86,30 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _from_iso(value: str) -> datetime:
+    """Parse a required stored timestamp and normalize it to UTC.
+
+    Args:
+        value: ISO timestamp loaded from SQLite.
+
+    Returns:
+        The parsed timezone-aware UTC timestamp.
+    """
+
     return _as_utc(datetime.fromisoformat(value))
 
 
 def _optional_from_iso(
     value: str | None,
 ) -> datetime | None:
+    """Parse an optional stored timestamp and normalize it to UTC.
+
+    Args:
+        value: ISO timestamp or ``None``.
+
+    Returns:
+        The parsed UTC timestamp, or ``None``.
+    """
+
     if value is None:
         return None
 
@@ -84,6 +121,20 @@ def _normalize_option(
     allowed_values: frozenset[str],
     field_name: str,
 ) -> str:
+    """Normalize a string option and enforce its allowlist.
+
+    Args:
+        value: Option supplied by the caller.
+        allowed_values: Normalized values accepted for the field.
+        field_name: Field name included in validation messages.
+
+    Returns:
+        The stripped, case-folded option.
+
+    Raises:
+        NewsletterSourceStoreError: If the value is not an allowed string.
+    """
+
     if not isinstance(value, str):
         raise NewsletterSourceStoreError(
             f"{field_name} must be a string"
@@ -103,7 +154,18 @@ def normalize_source_value(
     source_type: str,
     source_value: str,
 ) -> str:
-    """Normalize a newsletter source for reliable matching."""
+    """Normalize a newsletter source for reliable matching.
+
+    Args:
+        source_type: Supported sender, list, label, or domain category.
+        source_value: External source value to normalize.
+
+    Returns:
+        The normalized value used for storage and matching.
+
+    Raises:
+        NewsletterSourceStoreError: If the type or value is invalid.
+    """
 
     normalized_type = _normalize_option(
         source_type,
@@ -175,6 +237,15 @@ def normalize_source_value(
 def _source_from_row(
     row: sqlite3.Row,
 ) -> NewsletterSource:
+    """Map a newsletter-source row to its immutable domain record.
+
+    Args:
+        row: SQLite row containing all newsletter-source columns.
+
+    Returns:
+        The reconstructed source rule.
+    """
+
     return NewsletterSource(
         id=row["id"],
         account_id=row["account_id"],
@@ -193,7 +264,11 @@ def _source_from_row(
 
 
 class NewsletterSourceStore:
-    """Persist known newsletter inclusion and exclusion rules."""
+    """Persist known newsletter inclusion and exclusion rules.
+
+    Attributes:
+        database: SQLite connection and schema factory.
+    """
 
     ACCOUNT_ID = OAuthCredentialStore.ACCOUNT_ID
 
@@ -201,6 +276,12 @@ class NewsletterSourceStore:
         self,
         database: Database,
     ) -> None:
+        """Initialize the schema used by the source-rule repository.
+
+        Args:
+            database: Configured SQLite database factory.
+        """
+
         self.database = database
         self.database.initialize()
 
@@ -214,7 +295,23 @@ class NewsletterSourceStore:
         confidence: int = 100,
         observed_at: datetime | None = None,
     ) -> NewsletterSource:
-        """Create or update one newsletter source rule."""
+        """Create or update one newsletter source rule.
+
+        Args:
+            source_type: Supported source category.
+            source_value: Source value normalized for matching.
+            decision: ``include`` or ``exclude`` outcome.
+            origin: Manual, confirmed, or automatic provenance.
+            confidence: Integer confidence between 0 and 100.
+            observed_at: Optional timezone-aware update timestamp.
+
+        Returns:
+            The active persisted source rule.
+
+        Raises:
+            NewsletterSourceStoreError: If input is invalid, no authenticated
+                account exists, or the saved rule cannot be reloaded.
+        """
 
         normalized_type = _normalize_option(
             source_type,
@@ -333,7 +430,15 @@ class NewsletterSourceStore:
         source_type: str,
         source_value: str,
     ) -> NewsletterSource | None:
-        """Load one normalized newsletter source rule."""
+        """Load one normalized newsletter source rule.
+
+        Args:
+            source_type: Supported source category.
+            source_value: External source value to normalize.
+
+        Returns:
+            The matching source rule, or ``None`` when absent.
+        """
 
         normalized_type = _normalize_option(
             source_type,
@@ -381,7 +486,17 @@ class NewsletterSourceStore:
         self,
         decision: str | None = None,
     ) -> tuple[NewsletterSource, ...]:
-        """List active sources, optionally filtered by decision."""
+        """List active sources, optionally filtered by decision.
+
+        Args:
+            decision: Optional include or exclude filter.
+
+        Returns:
+            Active rules ordered by source type and value.
+
+        Raises:
+            NewsletterSourceStoreError: If a supplied decision is invalid.
+        """
 
         if decision is None:
             with self.database.connect() as connection:
@@ -456,7 +571,16 @@ class NewsletterSourceStore:
         *,
         changed_at: datetime | None = None,
     ) -> bool:
-        """Deactivate an existing source without deleting it."""
+        """Deactivate an existing source without deleting it.
+
+        Args:
+            source_type: Supported source category.
+            source_value: External source value to normalize.
+            changed_at: Optional timezone-aware update timestamp.
+
+        Returns:
+            Whether an active rule was changed.
+        """
 
         normalized_type = _normalize_option(
             source_type,
@@ -499,7 +623,20 @@ class NewsletterSourceStore:
         *,
         matched_at: datetime | None = None,
     ) -> NewsletterSource | None:
-        """Record a match only for an active source."""
+        """Record a match only for an active source.
+
+        Args:
+            source_type: Supported source category.
+            source_value: External source value to normalize.
+            matched_at: Optional timezone-aware match timestamp.
+
+        Returns:
+            The updated active rule, or ``None`` if no active rule matched.
+
+        Raises:
+            NewsletterSourceStoreError: If input is invalid or an updated row
+                cannot be reloaded.
+        """
 
         normalized_type = _normalize_option(
             source_type,

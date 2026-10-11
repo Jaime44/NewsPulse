@@ -1,3 +1,5 @@
+"""Test bounded retrieval and decoding of textual Gmail MIME content."""
+
 from __future__ import annotations
 
 import base64
@@ -23,6 +25,16 @@ def encode_text(
     text: str,
     encoding: str = "utf-8",
 ) -> str:
+    """Encode text as unpadded Gmail base64url data.
+
+    Args:
+        text: Text to encode.
+        encoding: Character encoding applied before base64url conversion.
+
+    Returns:
+        The encoded Gmail body value.
+    """
+
     encoded = base64.urlsafe_b64encode(
         text.encode(encoding)
     )
@@ -48,6 +60,21 @@ def make_part(
         ...,
     ] = (),
 ) -> GmailMimePart:
+    """Build a Gmail MIME part fixture.
+
+    Args:
+        mime_type: MIME type assigned to the part.
+        text_data: Optional inline encoded body.
+        attachment_id: Optional external Gmail body identifier.
+        filename: Optional attachment filename.
+        headers: Optional MIME headers.
+        body_size: Declared body size.
+        parts: Optional child parts.
+
+    Returns:
+        The immutable MIME part fixture.
+    """
+
     return GmailMimePart(
         mime_type=mime_type,
         filename=filename,
@@ -62,6 +89,15 @@ def make_part(
 def make_message(
     root_part: GmailMimePart,
 ) -> GmailFullMessage:
+    """Build a full Gmail message fixture around a root MIME part.
+
+    Args:
+        root_part: Root of the MIME tree.
+
+    Returns:
+        The immutable full-message fixture.
+    """
+
     return GmailFullMessage(
         message_id="message-1",
         thread_id="thread-1",
@@ -72,7 +108,11 @@ def make_message(
 class GmailMessageContentServiceTests(
     unittest.TestCase
 ):
+    """Verify safe MIME traversal, retrieval, and decoding."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.gmail_client = Mock(
             spec=GmailClient
         )
@@ -85,6 +125,8 @@ class GmailMessageContentServiceTests(
     def test_decodes_nested_inline_text_parts(
         self,
     ) -> None:
+        """Verify that the service decodes nested inline text parts."""
+
         plain_text = "Hola desde texto"
         html_text = "<p>Café semanal</p>"
 
@@ -156,6 +198,8 @@ class GmailMessageContentServiceTests(
     def test_resolves_external_text_body(
         self,
     ) -> None:
+        """Verify that the service resolves an external text body."""
+
         text = "Contenido externo"
 
         root = make_part(
@@ -208,6 +252,8 @@ class GmailMessageContentServiceTests(
     def test_skips_non_text_and_named_attachments(
         self,
     ) -> None:
+        """Verify that non-text and named attachment parts are skipped."""
+
         root = make_part(
             "multipart/mixed",
             parts=(
@@ -253,6 +299,8 @@ class GmailMessageContentServiceTests(
     def test_invalid_base64_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid base64 is rejected."""
+
         root = make_part(
             "text/plain",
             text_data="%%%",
@@ -281,6 +329,8 @@ class GmailMessageContentServiceTests(
     def test_part_and_total_limits_are_enforced(
         self,
     ) -> None:
+        """Verify that part and total limits are enforced."""
+
         four_bytes = make_part(
             "text/plain",
             text_data=encode_text(
@@ -349,6 +399,8 @@ class GmailMessageContentServiceTests(
     def test_unknown_charset_is_rejected(
         self,
     ) -> None:
+        """Verify that unknown charset is rejected."""
+
         root = make_part(
             "text/plain",
             text_data=encode_text(
@@ -388,6 +440,8 @@ class GmailMessageContentServiceTests(
     def test_gmail_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that Gmail error is sanitized."""
+
         (
             self.gmail_client
             .get_full_message
@@ -418,6 +472,8 @@ class GmailMessageContentServiceTests(
     def test_invalid_limits_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid limits are rejected."""
+
         invalid_limits = (
             {
                 "max_part_bytes": 0,

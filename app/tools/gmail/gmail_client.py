@@ -1,3 +1,10 @@
+"""Expose validated, typed operations over lower-level Gmail API clients.
+
+The high-level client paginates message references, validates metadata and MIME
+trees returned by Google, and converts raw attachment responses into immutable
+domain records consumed by classification and content-processing services.
+"""
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -13,9 +20,7 @@ from app.tools.gmail.user_client import UsersClient as GmailUsersClient
 
 
 class GmailClientError(Exception):
-    """
-    Raised when a high-level Gmail operation fails.
-    """
+    """Raised when a high-level Gmail operation or response validation fails."""
 
     pass
 
@@ -26,12 +31,16 @@ class GmailListingLimitReached(GmailClientError):
 
 @dataclass(frozen=True, slots=True)
 class GmailMessageReference:
+    """Identify a Gmail message and its containing thread."""
+
     message_id: str
     thread_id: str
 
 
 @dataclass(frozen=True, slots=True)
 class GmailMessageMetadata:
+    """Contain validated identifiers, labels, and classifier-facing headers."""
+
     message_id: str
     thread_id: str
     internal_date_ms: int
@@ -80,7 +89,21 @@ def _parse_mime_part(
     part_counter: list[int],
     max_parts: int,
 ) -> GmailMimePart:
-    """Validate one MIME part and all its children."""
+    """Validate one MIME part and all its children.
+
+    Args:
+        raw_part: Raw Gmail payload node.
+        depth: Current recursive nesting level.
+        max_depth: Maximum accepted nesting level.
+        part_counter: Shared mutable counter for traversed nodes.
+        max_parts: Maximum accepted node count.
+
+    Returns:
+        The validated immutable MIME subtree.
+
+    Raises:
+        GmailClientError: If structure, fields, depth, or part count is invalid.
+    """
 
     if not isinstance(raw_part, dict):
         raise GmailClientError(
@@ -249,11 +272,12 @@ def _parse_mime_part(
     )
 
 class GmailClient:
-    """
-    High-level wrapper for interacting with Gmail API clients (Messages, Labels, Drafts, Users, etc.).
+    """Provide typed Gmail operations over message and user sub-clients.
 
-    This class orchestrates lower-level clients such as MessagesClient and provides
-    a unified interface for Gmail operations.
+    Attributes:
+        logger: File logger for high-level operation failures.
+        messages: Low-level message and attachment adapter.
+        users: Low-level users-resource adapter.
     """
 
     MAX_TOTAL_RESULTS = 10_000
@@ -271,11 +295,10 @@ class GmailClient:
     )
 
     def __init__(self, service: Resource) -> None:
-        """
-        Initialize GmailClient with an authorized Gmail API service.
+        """Create Gmail sub-clients around an authorized discovery resource.
 
         Args:
-            service (Resource): Authorized Gmail API service instance.
+            service: Authorized Gmail API discovery resource.
         """
         self.logger: AppLogger = AppLogger("gmail_client.log")
 
@@ -287,14 +310,16 @@ class GmailClient:
         # self.drafts = GmailDraftsClient(service)
 
     def get_profile(self, user_id: str = "me") -> Dict[str, Any]:
-        """
-        Get Gmail profile for a user.
+        """Retrieve the raw Gmail profile for a user.
 
         Args:
-            user_id (str): User identifier. Use "me" for the authenticated user.
+            user_id: User identifier; ``"me"`` selects the authenticated user.
 
         Returns:
-            Dict[str, Any]: User profile information.
+            The Gmail API profile response.
+
+        Raises:
+            UsersClientError: If the lower-level users request fails.
         """
         try:
             return self.users.get_profile(user_id=user_id)
@@ -312,7 +337,27 @@ class GmailClient:
         include_spam_trash: bool = False,
         require_complete: bool = False,
     ) -> list[GmailMessageReference]:
-        """List validated Gmail references across pages."""
+        """List validated Gmail references across pages.
+
+        Args:
+            user_id: Gmail user identifier.
+            total_limit: Maximum references to return across all pages.
+            page_size: Maximum references requested per Gmail call.
+            query: Optional Gmail search query.
+            label_ids: Optional label filter.
+            include_spam_trash: Whether Gmail may include spam and trash.
+            require_complete: Whether remaining results at the limit are an
+                error instead of a valid bounded result.
+
+        Returns:
+            Validated message and thread references in API order.
+
+        Raises:
+            GmailListingLimitReached: If completeness is required and more
+                results remain after ``total_limit``.
+            GmailClientError: If inputs, pagination, response data, or the
+                lower-level request is invalid.
+        """
 
         if (
             isinstance(total_limit, bool)
@@ -477,7 +522,18 @@ class GmailClient:
         message_id: str,
         user_id: str = "me",
     ) -> GmailMessageMetadata:
-        """Retrieve and validate metadata for one Gmail message."""
+        """Retrieve and validate metadata for one Gmail message.
+
+        Args:
+            message_id: Gmail message identifier.
+            user_id: Gmail user identifier.
+
+        Returns:
+            Typed identifiers, labels, timestamp, and classifier-facing headers.
+
+        Raises:
+            GmailClientError: If retrieval fails or the response is malformed.
+        """
 
         try:
             response = self.messages.get_message(
@@ -631,7 +687,19 @@ class GmailClient:
         message_id: str,
         user_id: str = "me",
     ) -> GmailFullMessage:
-        """Retrieve and validate one complete Gmail message."""
+        """Retrieve and validate one complete Gmail message.
+
+        Args:
+            message_id: Gmail message identifier.
+            user_id: Gmail user identifier.
+
+        Returns:
+            The typed message identifiers and validated MIME tree.
+
+        Raises:
+            GmailClientError: If identifiers, retrieval, response data, or MIME
+                limits are invalid.
+        """
 
         if (
             not isinstance(message_id, str)
@@ -730,7 +798,20 @@ class GmailClient:
         attachment_id: str,
         user_id: str = "me",
     ) -> GmailAttachmentData:
-        """Retrieve and validate encoded attachment data."""
+        """Retrieve and validate encoded attachment data.
+
+        Args:
+            message_id: Gmail message identifier.
+            attachment_id: Gmail attachment identifier.
+            user_id: Gmail user identifier.
+
+        Returns:
+            Declared size and stripped encoded attachment body.
+
+        Raises:
+            GmailClientError: If identifiers, retrieval, or response data is
+                invalid.
+        """
 
         if (
             not isinstance(message_id, str)

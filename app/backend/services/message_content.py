@@ -1,3 +1,10 @@
+"""Retrieve and safely decode textual parts from Gmail MIME message trees.
+
+The service traverses validated Gmail MIME structures, resolves inline or
+external bodies, enforces per-part and aggregate byte limits, and decodes text
+using the declared charset before handing parts to the content parser.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -30,7 +37,14 @@ class DecodedTextPart:
 def _walk_mime_parts(
     part: GmailMimePart,
 ) -> Iterator[GmailMimePart]:
-    """Yield one MIME part and all its descendants."""
+    """Yield one MIME part and all its descendants.
+
+    Args:
+        part: Root of the MIME subtree to traverse.
+
+    Yields:
+        Each MIME part in depth-first preorder.
+    """
 
     yield part
 
@@ -43,7 +57,17 @@ def _walk_mime_parts(
 def _decode_base64url(
     encoded_data: str,
 ) -> bytes:
-    """Decode validated Gmail base64url data."""
+    """Decode validated Gmail base64url data.
+
+    Args:
+        encoded_data: ASCII Gmail body data, with optional omitted padding.
+
+    Returns:
+        The decoded bytes.
+
+    Raises:
+        MessageContentError: If data is non-ASCII or invalid base64url.
+    """
 
     try:
         encoded_bytes = encoded_data.encode(
@@ -77,7 +101,15 @@ def _find_header(
     part: GmailMimePart,
     header_name: str,
 ) -> str | None:
-    """Return the first normalized MIME header value."""
+    """Return the first normalized MIME header value.
+
+    Args:
+        part: Validated MIME part containing normalized header names.
+        header_name: Case-insensitive header name to find.
+
+    Returns:
+        The first matching value, or ``None``.
+    """
 
     normalized_name = (
         header_name.strip().casefold()
@@ -93,7 +125,17 @@ def _find_header(
 def _get_charset(
     part: GmailMimePart,
 ) -> str:
-    """Resolve and validate the part character encoding."""
+    """Resolve and validate the part character encoding.
+
+    Args:
+        part: MIME part whose content-type header may declare a charset.
+
+    Returns:
+        The canonical codec name, defaulting to UTF-8.
+
+    Raises:
+        MessageContentError: If Python does not recognize the declared charset.
+    """
 
     content_type = _find_header(
         part,
@@ -122,7 +164,13 @@ def _get_charset(
 
 
 class GmailMessageContentService:
-    """Retrieve and safely decode textual Gmail MIME parts."""
+    """Retrieve and safely decode textual, non-file Gmail MIME parts.
+
+    Attributes:
+        gmail_client: High-level Gmail API adapter.
+        max_part_bytes: Maximum decoded size accepted for one text part.
+        max_total_bytes: Maximum decoded size accepted across all text parts.
+    """
 
     TEXT_MIME_TYPES = frozenset(
         {
@@ -145,6 +193,17 @@ class GmailMessageContentService:
             DEFAULT_MAX_TOTAL_BYTES
         ),
     ) -> None:
+        """Configure the Gmail client and MIME size limits.
+
+        Args:
+            gmail_client: Client used to retrieve messages and attachments.
+            max_part_bytes: Positive per-part byte limit.
+            max_total_bytes: Aggregate limit no smaller than the part limit.
+
+        Raises:
+            ValueError: If either size limit is invalid.
+        """
+
         if (
             isinstance(max_part_bytes, bool)
             or not isinstance(
@@ -188,7 +247,20 @@ class GmailMessageContentService:
         message_id: str,
         user_id: str,
     ) -> str | None:
-        """Load inline data or one external Gmail body."""
+        """Load inline data or one external Gmail body.
+
+        Args:
+            part: Validated MIME part containing body metadata.
+            message_id: Parent Gmail message identifier.
+            user_id: Gmail user identifier used for attachment retrieval.
+
+        Returns:
+            Encoded body data, or ``None`` if the part has no body.
+
+        Raises:
+            MessageContentError: If an external body exceeds the part limit.
+            GmailClientError: If attachment retrieval fails.
+        """
 
         if (
             part.body_data is not None
@@ -223,7 +295,19 @@ class GmailMessageContentService:
         message_id: str,
         user_id: str = "me",
     ) -> tuple[DecodedTextPart, ...]:
-        """Retrieve and decode textual, non-file MIME parts."""
+        """Retrieve and decode textual, non-file MIME parts.
+
+        Args:
+            message_id: Gmail message identifier to retrieve.
+            user_id: Gmail user identifier used for API calls.
+
+        Returns:
+            Decoded non-empty plain-text and HTML parts in traversal order.
+
+        Raises:
+            MessageContentError: If Gmail retrieval, body encoding, charset, or
+                configured byte limits prevent safe extraction.
+        """
 
         try:
             message = (

@@ -1,3 +1,5 @@
+"""Test the SQLite schema, constraints, indexes, and ownership cascades."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -13,7 +15,11 @@ NOW = "2026-09-13T00:00:00+00:00"
 
 
 class DatabaseSchemaTests(unittest.TestCase):
+    """Verify schema creation, constraints, indexes, and cascades."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = TemporaryDirectory()
         database_path = (
             Path(self.temporary_directory.name)
@@ -23,12 +29,20 @@ class DatabaseSchemaTests(unittest.TestCase):
         self.database.initialize()
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     @staticmethod
     def insert_account(
         connection: sqlite3.Connection,
     ) -> None:
+        """Insert the single authenticated account required by the fixture.
+
+        Args:
+            connection: Open SQLite connection receiving the account row.
+        """
+
         connection.execute(
             """
             INSERT INTO oauth_credentials (
@@ -54,6 +68,13 @@ class DatabaseSchemaTests(unittest.TestCase):
         connection: sqlite3.Connection,
         status: str = "discovered",
     ) -> None:
+        """Insert a Gmail message required by the database fixture.
+
+        Args:
+            connection: Open SQLite connection receiving the message row.
+            status: Initial message processing status.
+        """
+
         connection.execute(
             """
             INSERT INTO gmail_messages (
@@ -80,6 +101,8 @@ class DatabaseSchemaTests(unittest.TestCase):
     def test_schema_creates_ingestion_tables_and_indexes(
         self,
     ) -> None:
+        """Verify that schema creates ingestion tables and indexes."""
+
         with self.database.connect() as connection:
             tables = {
                 row["name"]
@@ -124,6 +147,8 @@ class DatabaseSchemaTests(unittest.TestCase):
     def test_duplicate_gmail_message_is_rejected(
         self,
     ) -> None:
+        """Verify that duplicate Gmail message is rejected."""
+
         with self.database.connect() as connection:
             self.insert_account(connection)
             self.insert_message(connection)
@@ -134,6 +159,8 @@ class DatabaseSchemaTests(unittest.TestCase):
     def test_invalid_message_status_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid message status is rejected."""
+
         with self.database.connect() as connection:
             self.insert_account(connection)
 
@@ -147,6 +174,8 @@ class DatabaseSchemaTests(unittest.TestCase):
     def test_invalid_classification_verdict_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid classification verdict is rejected."""
+
         with self.database.connect() as connection:
             self.insert_account(connection)
             self.insert_message(connection)
@@ -184,6 +213,8 @@ class DatabaseSchemaTests(unittest.TestCase):
     def test_deleting_account_removes_owned_data(
         self,
     ) -> None:
+        """Verify that deleting account removes owned data."""
+
         with self.database.connect() as connection:
             self.insert_account(connection)
 

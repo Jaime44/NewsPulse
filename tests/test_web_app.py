@@ -1,3 +1,5 @@
+"""Test Flask authentication, Gmail, source-management, ingestion, and UI routes."""
+
 from __future__ import annotations
 
 import importlib
@@ -27,8 +29,12 @@ from app.backend.services.oauth_credentials import (
 
 
 class GmailRouteTests(unittest.TestCase):
+    """Verify Flask route authentication, responses, and browser safeguards."""
+
     @classmethod
     def setUpClass(cls) -> None:
+        """Create the shared configured Flask application fixture."""
+
         cls.temporary_directory = TemporaryDirectory()
         directory = Path(cls.temporary_directory.name)
 
@@ -85,17 +91,25 @@ class GmailRouteTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        """Release the shared Flask application fixture."""
+
         sys.modules.pop("app.backend.web_app", None)
         cls.temporary_directory.cleanup()
 
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.client = self.web_app.app.test_client()
 
     def authenticate_session(self) -> None:
+        """Store the valid single-account identifier in the test session."""
+
         with self.client.session_transaction() as current_session:
             current_session["account_id"] = 1
 
     def test_gmail_routes_reject_unauthenticated_requests(self) -> None:
+        """Verify that Gmail routes reject unauthenticated requests."""
+
         endpoints = (
             "/api/gmail/profile",
             "/api/gmail/messages",
@@ -117,6 +131,8 @@ class GmailRouteTests(unittest.TestCase):
                 )
 
     def test_reauthentication_error_clears_session(self) -> None:
+        """Verify that reauthentication error clears session."""
+
         endpoints = (
             "/api/gmail/profile",
             "/api/gmail/messages",
@@ -144,6 +160,8 @@ class GmailRouteTests(unittest.TestCase):
                     )
 
     def test_temporary_refresh_error_preserves_session(self) -> None:
+        """Verify that temporary refresh error preserves session."""
+
         endpoints = (
             "/api/gmail/profile",
             "/api/gmail/messages",
@@ -171,6 +189,8 @@ class GmailRouteTests(unittest.TestCase):
                     )
 
     def test_profile_route_returns_gmail_profile(self) -> None:
+        """Verify that profile route returns Gmail profile."""
+
         gmail_service = Mock()
         gmail_client = Mock()
         gmail_client.get_profile.return_value = {
@@ -198,6 +218,8 @@ class GmailRouteTests(unittest.TestCase):
         )
 
     def test_messages_route_returns_gmail_messages(self) -> None:
+        """Verify that messages route returns Gmail messages."""
+
         gmail_service = Mock()
 
         execute = (
@@ -250,6 +272,8 @@ class GmailRouteTests(unittest.TestCase):
 
 
     def test_google_auth_stores_state_in_signed_session(self) -> None:
+        """Verify that Google OAuth state is stored in the signed session."""
+
         flow = Mock()
         flow.authorization_url.return_value = (
             "https://accounts.google.com/o/oauth2/auth",
@@ -300,6 +324,8 @@ class GmailRouteTests(unittest.TestCase):
         )
 
     def test_callback_without_code_is_rejected(self) -> None:
+        """Verify that callback without code is rejected."""
+
         with self.client.session_transaction() as current_session:
             current_session["oauth_state"] = "expected-state"
 
@@ -325,6 +351,8 @@ class GmailRouteTests(unittest.TestCase):
             )
 
     def test_callback_rejects_invalid_state_conditions(self) -> None:
+        """Verify that callback rejects invalid state conditions."""
+
         cases = (
             (
                 "missing request state",
@@ -381,6 +409,8 @@ class GmailRouteTests(unittest.TestCase):
                     )
 
     def test_successful_callback_replaces_previous_session(self) -> None:
+        """Verify that successful callback replaces previous session."""
+
         flow = Mock()
         credentials = Mock()
         flow.credentials = credentials
@@ -449,6 +479,8 @@ class GmailRouteTests(unittest.TestCase):
             )
 
     def test_callback_handles_google_authorization_errors(self) -> None:
+        """Verify that the callback handles Google authorization errors."""
+
         cases = (
             (
                 "access_denied",
@@ -509,6 +541,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_google_auth_failure_does_not_log_exception_details(
         self,
     ) -> None:
+        """Verify that Google auth failures do not leak exception details."""
+
         with (
             patch.object(
                 self.web_app.Flow,
@@ -545,6 +579,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_callback_failure_does_not_log_exception_details(
         self,
     ) -> None:
+        """Verify that callback failure does not log exception details."""
+
         with self.client.session_transaction() as current_session:
             current_session["oauth_state"] = "expected-state"
 
@@ -588,6 +624,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_sources_require_authentication(
         self,
     ) -> None:
+        """Verify that newsletter sources require authentication."""
+
         with (
             patch.object(
                 self.web_app,
@@ -617,6 +655,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_sources_return_safe_rules(
         self,
     ) -> None:
+        """Verify that newsletter sources return safe rules."""
+
         timestamp = datetime(
             2026,
             10,
@@ -750,6 +790,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_failure_is_sanitized(
         self,
     ) -> None:
+        """Verify that newsletter source failure is sanitized."""
+
         with (
             patch.object(
                 self.web_app,
@@ -805,6 +847,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_save_requires_authentication(
         self,
     ) -> None:
+        """Verify that newsletter source save requires authentication."""
+
         with (
             patch.object(
                 self.web_app,
@@ -844,6 +888,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_save_requires_action_header(
         self,
     ) -> None:
+        """Verify that newsletter source save requires action header."""
+
         with (
             patch.object(
                 self.web_app,
@@ -882,6 +928,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_save_rejects_invalid_payloads(
         self,
     ) -> None:
+        """Verify that newsletter source save rejects invalid payloads."""
+
         invalid_payloads = (
             [],
             {
@@ -941,6 +989,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_save_forces_manual_origin(
         self,
     ) -> None:
+        """Verify that newsletter source save forces manual origin."""
+
         timestamp = datetime(
             2026,
             10,
@@ -1034,6 +1084,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_invalid_newsletter_source_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid newsletter source is rejected."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1085,6 +1137,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_save_failure_is_sanitized(
         self,
     ) -> None:
+        """Verify that newsletter source save failure is sanitized."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1148,6 +1202,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_ingestion_scan_requires_post_and_authentication(
         self,
     ) -> None:
+        """Verify that ingestion scan requires post and authentication."""
+
         get_response = self.client.get(
             "/api/ingestion/scan"
         )
@@ -1181,6 +1237,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_ingestion_scan_requires_action_header(
         self,
     ) -> None:
+        """Verify that ingestion scan requires action header."""
+
         self.authenticate_session()
 
         with (
@@ -1215,6 +1273,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_deactivation_requires_authentication(
         self,
     ) -> None:
+        """Verify that newsletter source deactivation requires authentication."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1253,6 +1313,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_deactivation_requires_action_header(
         self,
     ) -> None:
+        """Verify that newsletter source deactivation requires action header."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1290,6 +1352,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_deactivation_rejects_invalid_payloads(
         self,
     ) -> None:
+        """Verify that newsletter source deactivation rejects invalid payloads."""
+
         invalid_payloads = (
             [],
             {
@@ -1350,6 +1414,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_can_be_deactivated(
         self,
     ) -> None:
+        """Verify that newsletter source can be deactivated."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1396,6 +1462,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_deactivation_returns_not_found(
         self,
     ) -> None:
+        """Verify that newsletter source deactivation returns not found."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1438,6 +1506,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_invalid_newsletter_source_deactivation_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid newsletter source deactivation is rejected."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1488,6 +1558,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_newsletter_source_deactivation_failure_is_sanitized(
         self,
     ) -> None:
+        """Verify that newsletter source deactivation failure is sanitized."""
+
         with (
             patch.object(
                 self.web_app,
@@ -1551,6 +1623,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_ingestion_scan_returns_safe_summary(
         self,
     ) -> None:
+        """Verify that ingestion scan returns safe summary."""
+
         self.authenticate_session()
 
         gmail_service = Mock()
@@ -1656,6 +1730,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_ingestion_scan_rejects_concurrent_run(
         self,
     ) -> None:
+        """Verify that ingestion scan rejects concurrent run."""
+
         self.authenticate_session()
 
         self.web_app.ingestion_scan_lock.acquire()
@@ -1699,6 +1775,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_ingestion_failure_is_sanitized_and_unlocks(
         self,
     ) -> None:
+        """Verify that ingestion failure is sanitized and unlocks."""
+
         self.authenticate_session()
 
         ingestion_service = Mock()
@@ -1765,6 +1843,8 @@ class GmailRouteTests(unittest.TestCase):
         )
 
     def test_logout_requires_post_and_clears_session(self) -> None:
+        """Verify that logout requires post and clears session."""
+
         self.authenticate_session()
 
         get_response = self.client.get("/logout")
@@ -1797,6 +1877,8 @@ class GmailRouteTests(unittest.TestCase):
             )
 
     def test_dashboard_uses_post_form_for_logout(self) -> None:
+        """Verify that dashboard uses post form for logout."""
+
         stored_account = Mock(
             email="owner@example.com",
         )
@@ -1843,6 +1925,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_dashboard_exposes_manual_ingestion_control(
         self,
     ) -> None:
+        """Verify that dashboard exposes manual ingestion control."""
+
         stored_account = Mock(
             email="owner@example.com",
         )
@@ -1904,6 +1988,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_dashboard_exposes_newsletter_source_manager(
         self,
     ) -> None:
+        """Verify that dashboard exposes newsletter source manager."""
+
         stored_account = Mock(
             email="owner@example.com",
         )
@@ -1963,6 +2049,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_dashboard_loads_newsletter_sources_safely(
         self,
     ) -> None:
+        """Verify that dashboard loads newsletter sources safely."""
+
         stored_account = Mock(
             email="owner@example.com",
         )
@@ -2031,6 +2119,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_dashboard_saves_newsletter_sources_safely(
         self,
     ) -> None:
+        """Verify that dashboard saves newsletter sources safely."""
+
         stored_account = Mock(
             email="owner@example.com",
         )
@@ -2101,6 +2191,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_dashboard_deactivates_newsletter_sources_safely(
         self,
     ) -> None:
+        """Verify that dashboard deactivates newsletter sources safely."""
+
         stored_account = Mock(
             email="owner@example.com",
         )
@@ -2172,6 +2264,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_dashboard_without_account_id_does_not_load_store(
         self,
     ) -> None:
+        """Verify that dashboard without account ID does not load store."""
+
         with patch.object(
             self.web_app.oauth_store,
             "load",
@@ -2187,6 +2281,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_invalid_account_id_is_rejected_and_cleared(
         self,
     ) -> None:
+        """Verify that invalid account ID is rejected and cleared."""
+
         with self.client.session_transaction() as current_session:
             current_session["account_id"] = 999
             current_session["legacy_value"] = "remove-me"
@@ -2212,6 +2308,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_missing_or_revoked_account_clears_session(
         self,
     ) -> None:
+        """Verify that missing or revoked account clears session."""
+
         cases = (
             (
                 "missing account",
@@ -2255,6 +2353,8 @@ class GmailRouteTests(unittest.TestCase):
     def test_valid_account_is_loaded_from_server_storage(
         self,
     ) -> None:
+        """Verify that valid account is loaded from server storage."""
+
         stored_account = Mock(
             account_id=1,
             email="owner@example.com",

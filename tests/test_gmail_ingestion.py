@@ -1,3 +1,5 @@
+"""Test incremental Gmail scanning, cursor safety, and failure handling."""
+
 from __future__ import annotations
 
 import unittest
@@ -47,11 +49,24 @@ SCAN_STARTED_AT = datetime(
 
 
 def _timestamp_ms(value: datetime) -> int:
+    """Convert a timestamp to Gmail's millisecond epoch format.
+
+    Args:
+        value: Timestamp to convert.
+
+    Returns:
+        The Unix timestamp in milliseconds.
+    """
+
     return int(value.timestamp() * 1_000)
 
 
 class GmailIngestionServiceTests(unittest.TestCase):
+    """Verify incremental scan coordination and cursor safety."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.gmail_client = Mock()
         self.store = Mock()
         self.classification_service = Mock()
@@ -125,6 +140,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_successful_scan_registers_new_message(
         self,
     ) -> None:
+        """Verify that successful scan registers new message."""
+
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
@@ -234,6 +251,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_known_message_skips_metadata_request(
         self,
     ) -> None:
+        """Verify that known message skips metadata request."""
+
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
@@ -269,6 +288,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_message_before_application_start_is_ignored(
         self,
     ) -> None:
+        """Verify that message before application start is ignored."""
+
         historical_metadata = GmailMessageMetadata(
             message_id="message-1",
             thread_id="thread-1",
@@ -315,6 +336,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_existing_cursor_is_used_for_next_scan(
         self,
     ) -> None:
+        """Verify that existing cursor is used for next scan."""
+
         last_successful_scan = (
             APPLICATION_STARTED_AT
             + timedelta(minutes=3)
@@ -371,6 +394,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_naive_ingestion_clock_is_rejected(
         self,
     ) -> None:
+        """Verify that naive ingestion clock is rejected."""
+
         naive_clock = datetime(
             2026,
             9,
@@ -415,6 +440,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_registration_conflict_counts_as_known(
         self,
     ) -> None:
+        """Verify that registration conflict counts as known."""
+
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
@@ -440,6 +467,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_inconsistent_metadata_does_not_advance_cursor(
         self,
     ) -> None:
+        """Verify that inconsistent metadata does not advance cursor."""
+
         inconsistent_metadata = replace(
             self.metadata,
             message_id="different-message",
@@ -477,6 +506,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_partial_failure_keeps_cursor_for_retry(
         self,
     ) -> None:
+        """Verify that partial failure keeps cursor for retry."""
+
         second_reference = GmailMessageReference(
             message_id="message-2",
             thread_id="thread-2",
@@ -538,6 +569,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_classification_failure_keeps_cursor_for_retry(
         self,
     ) -> None:
+        """Verify that classification failure keeps cursor for retry."""
+
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
@@ -597,6 +630,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_storage_failure_does_not_advance_cursor(
         self,
     ) -> None:
+        """Verify that storage failure does not advance cursor."""
+
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
@@ -643,6 +678,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_unexpected_failure_is_sanitized(
         self,
     ) -> None:
+        """Verify that unexpected failure is sanitized."""
+
         self.gmail_client.list_message_references.return_value = [
             self.reference
         ]
@@ -685,6 +722,8 @@ class GmailIngestionServiceTests(unittest.TestCase):
     def test_result_limit_does_not_advance_cursor(
         self,
     ) -> None:
+        """Verify that result limit does not advance cursor."""
+
         (
             self.gmail_client
             .list_message_references

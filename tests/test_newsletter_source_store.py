@@ -1,3 +1,5 @@
+"""Test normalization and persistence of newsletter source rules."""
+
 from __future__ import annotations
 
 import unittest
@@ -24,7 +26,11 @@ STARTED_AT = datetime(
 
 
 class NewsletterSourceStoreTests(unittest.TestCase):
+    """Verify source-rule validation, normalization, and persistence."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = TemporaryDirectory()
         database_path = (
             Path(self.temporary_directory.name)
@@ -37,9 +43,13 @@ class NewsletterSourceStoreTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def insert_account(self) -> None:
+        """Insert the single authenticated account required by the fixture."""
+
         timestamp = STARTED_AT.isoformat()
 
         with self.database.connect() as connection:
@@ -66,6 +76,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_source_requires_authenticated_account(
         self,
     ) -> None:
+        """Verify that source requires authenticated account."""
+
         with self.assertRaises(
             NewsletterSourceStoreError
         ):
@@ -78,6 +90,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_sender_is_normalized_and_loaded(
         self,
     ) -> None:
+        """Verify that sender is normalized and loaded."""
+
         self.insert_account()
 
         saved_source = self.store.save_source(
@@ -138,6 +152,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_existing_source_is_updated(
         self,
     ) -> None:
+        """Verify that existing source is updated."""
+
         self.insert_account()
 
         original_source = self.store.save_source(
@@ -196,6 +212,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_active_sources_can_be_listed_by_decision(
         self,
     ) -> None:
+        """Verify that active sources can be listed by decision."""
+
         self.insert_account()
 
         included_sender = self.store.save_source(
@@ -244,6 +262,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_source_can_be_deactivated_and_reactivated(
         self,
     ) -> None:
+        """Verify that source can be deactivated and reactivated."""
+
         self.insert_account()
 
         original_source = self.store.save_source(
@@ -315,6 +335,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_active_source_match_is_recorded(
         self,
     ) -> None:
+        """Verify that active source match is recorded."""
+
         self.insert_account()
 
         self.store.save_source(
@@ -363,6 +385,8 @@ class NewsletterSourceStoreTests(unittest.TestCase):
     def test_invalid_source_data_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid source data is rejected."""
+
         self.insert_account()
 
         naive_timestamp = datetime(

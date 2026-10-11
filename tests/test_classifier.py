@@ -1,3 +1,5 @@
+"""Test deterministic newsletter scoring and classifier input validation."""
+
 from __future__ import annotations
 
 import unittest
@@ -16,7 +18,11 @@ from app.tools.gmail.gmail_client import (
 
 
 class NewsletterClassifierTests(unittest.TestCase):
+    """Verify newsletter signal scoring and invalid-input rejection."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.metadata = GmailMessageMetadata(
             message_id="message-1",
             thread_id="thread-1",
@@ -34,6 +40,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_message_without_signals_is_not_newsletter(
         self,
     ) -> None:
+        """Verify that a message without signals is not a newsletter."""
+
         classifier = NewsletterClassifier()
 
         result = classifier.classify(
@@ -57,6 +65,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_single_list_header_requires_review(
         self,
     ) -> None:
+        """Verify that single list header requires review."""
+
         classifier = NewsletterClassifier()
 
         metadata = replace(
@@ -81,6 +91,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_combined_list_headers_classify_newsletter(
         self,
     ) -> None:
+        """Verify that combined list headers produce a newsletter verdict."""
+
         classifier = NewsletterClassifier()
 
         metadata = replace(
@@ -111,6 +123,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_bulk_precedence_requires_review(
         self,
     ) -> None:
+        """Verify that bulk precedence requires review."""
+
         classifier = NewsletterClassifier()
 
         metadata = replace(
@@ -133,6 +147,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_configured_label_classifies_newsletter(
         self,
     ) -> None:
+        """Verify that configured label classifies newsletter."""
+
         classifier = NewsletterClassifier(
             newsletter_label_ids=(
                 "Label_Newsletters",
@@ -162,6 +178,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_configured_sender_is_normalized(
         self,
     ) -> None:
+        """Verify that configured sender is normalized."""
+
         classifier = NewsletterClassifier(
             known_senders=(
                 " NEWS@example.com ",
@@ -190,6 +208,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_auto_submitted_is_only_a_weak_signal(
         self,
     ) -> None:
+        """Verify that auto submitted is only a weak signal."""
+
         classifier = NewsletterClassifier()
 
         automated_result = classifier.classify(
@@ -231,6 +251,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_invalid_configuration_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid configuration is rejected."""
+
         invalid_configurations = (
             {
                 "newsletter_label_ids": (
@@ -278,6 +300,8 @@ class NewsletterClassifierTests(unittest.TestCase):
     def test_invalid_metadata_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid metadata is rejected."""
+
         classifier = NewsletterClassifier()
 
         invalid_metadata = (

@@ -1,3 +1,10 @@
+"""Resolve stored newsletter rules ahead of heuristic classification.
+
+Candidate sender, domain, list, and Gmail-label values are normalized from one
+message. Matching manual or confirmed rules are ordered deterministically and
+override the explainable heuristic classifier; automatic rules do not.
+"""
+
 from __future__ import annotations
 
 from email.utils import parseaddr
@@ -41,7 +48,15 @@ def _try_normalize_source(
     source_type: str,
     source_value: str | None,
 ) -> str | None:
-    """Normalize message data without failing on malformed headers."""
+    """Normalize message data without failing on malformed headers.
+
+    Args:
+        source_type: Candidate newsletter source category.
+        source_value: Optional raw value extracted from metadata.
+
+    Returns:
+        The normalized candidate, or ``None`` when absent or malformed.
+    """
 
     if (
         not isinstance(source_value, str)
@@ -61,7 +76,14 @@ def _try_normalize_source(
 def _message_source_values(
     metadata: GmailMessageMetadata,
 ) -> dict[str, frozenset[str]]:
-    """Extract normalized source candidates from Gmail metadata."""
+    """Extract normalized source candidates from Gmail metadata.
+
+    Args:
+        metadata: Validated Gmail headers and labels.
+
+    Returns:
+        Candidate values grouped by supported source type.
+    """
 
     candidates: dict[str, set[str]] = {
         "sender": set(),
@@ -130,6 +152,16 @@ def _rule_matches(
     source: NewsletterSource,
     candidates: dict[str, frozenset[str]],
 ) -> bool:
+    """Return whether a stored source occurs in normalized message candidates.
+
+    Args:
+        source: Stored source rule to evaluate.
+        candidates: Candidate values grouped by source type.
+
+    Returns:
+        Whether the rule's normalized value matches the message.
+    """
+
     return (
         source.source_value
         in candidates.get(
@@ -142,6 +174,15 @@ def _rule_matches(
 def _rule_priority(
     source: NewsletterSource,
 ) -> tuple[int, int, int]:
+    """Return the deterministic origin, decision, and source ordering key.
+
+    Args:
+        source: Matching stored source rule.
+
+    Returns:
+        Integer priorities suitable for ascending sort.
+    """
+
     return (
         ORIGIN_PRIORITY[source.origin],
         DECISION_PRIORITY[source.decision],
@@ -150,13 +191,25 @@ def _rule_priority(
 
 
 class NewsletterClassificationService:
-    """Resolve stored source rules before heuristic classification."""
+    """Resolve stored source rules before heuristic classification.
+
+    Attributes:
+        source_store: Repository for active single-account source rules.
+        classifier: Metadata-based fallback classifier.
+    """
 
     def __init__(
         self,
         source_store: NewsletterSourceStore,
         classifier: NewsletterClassifier,
     ) -> None:
+        """Bind the source-rule repository and heuristic classifier.
+
+        Args:
+            source_store: Repository for active newsletter rules.
+            classifier: Heuristic fallback classifier.
+        """
+
         self.source_store = source_store
         self.classifier = classifier
 
@@ -164,7 +217,21 @@ class NewsletterClassificationService:
         self,
         metadata: GmailMessageMetadata,
     ) -> NewsletterClassification:
-        """Return the final newsletter decision for one message."""
+        """Return the final newsletter decision for one message.
+
+        Args:
+            metadata: Validated Gmail message metadata.
+
+        Returns:
+            The highest-priority stored-rule decision, or the heuristic result
+            when no eligible active rule matches.
+
+        Raises:
+            NewsletterClassifierError: If metadata is invalid for the fallback
+                classifier.
+            NewsletterSourceStoreError: If source retrieval or match recording
+                fails.
+        """
 
         heuristic_result = self.classifier.classify(
             metadata

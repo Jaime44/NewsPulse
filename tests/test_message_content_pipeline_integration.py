@@ -1,3 +1,5 @@
+"""Test the complete newsletter content lifecycle with SQLite persistence."""
+
 from __future__ import annotations
 
 import base64
@@ -76,7 +78,11 @@ ENCODED_HTML_CONTENT = (
 class MessageContentPipelineIntegrationTests(
     unittest.TestCase
 ):
+    """Verify the persisted newsletter content lifecycle end to end."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = (
             TemporaryDirectory()
         )
@@ -200,9 +206,13 @@ class MessageContentPipelineIntegrationTests(
         )
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def insert_account(self) -> None:
+        """Insert the single authenticated account required by the fixture."""
+
         timestamp = (
             FIRST_SCAN_AT.isoformat()
         )
@@ -232,6 +242,15 @@ class MessageContentPipelineIntegrationTests(
         self,
         scan_at: datetime,
     ) -> GmailIngestionService:
+        """Assemble the content pipeline used by the integration fixture.
+
+        Args:
+            scan_at: Timestamp returned by the ingestion clock.
+
+        Returns:
+            The fully wired ingestion service.
+        """
+
         service = GmailIngestionService(
             gmail_client=self.gmail_client,
             store=self.ingestion_store,
@@ -250,6 +269,8 @@ class MessageContentPipelineIntegrationTests(
     def test_newsletter_content_lifecycle(
         self,
     ) -> None:
+        """Verify the complete persisted newsletter content lifecycle."""
+
         first_service = self.build_service(
             FIRST_SCAN_AT
         )

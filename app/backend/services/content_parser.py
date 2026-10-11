@@ -1,3 +1,10 @@
+"""Convert decoded email parts into bounded text and validated web links.
+
+The parser prefers the longest plain-text MIME part, falls back to readable
+HTML, normalizes absolute HTTP(S) URLs, removes duplicates in encounter order,
+and enforces configured text and link limits.
+"""
+
 from __future__ import annotations
 
 import re
@@ -41,7 +48,14 @@ TRAILING_URL_PUNCTUATION = (
 def _normalize_text(
     value: str,
 ) -> str:
-    """Normalize whitespace while preserving paragraphs."""
+    """Normalize whitespace while preserving non-empty line boundaries.
+
+    Args:
+        value: Decoded plain or HTML-derived text.
+
+    Returns:
+        Text with normalized intra-line whitespace and newline-separated lines.
+    """
 
     normalized_newlines = (
         value
@@ -71,7 +85,15 @@ def _normalize_http_url(
     *,
     max_url_chars: int,
 ) -> str | None:
-    """Validate and normalize one absolute HTTP URL."""
+    """Validate and normalize one absolute HTTP URL.
+
+    Args:
+        value: Candidate URL value.
+        max_url_chars: Maximum accepted candidate length.
+
+    Returns:
+        A fragment-free normalized HTTP(S) URL, or ``None`` when invalid.
+    """
 
     if not isinstance(value, str):
         return None
@@ -147,7 +169,15 @@ def _extract_urls_from_text(
     *,
     max_url_chars: int,
 ) -> list[str]:
-    """Extract absolute HTTP URLs from readable text."""
+    """Extract absolute HTTP URLs from readable text.
+
+    Args:
+        text: Readable text to scan.
+        max_url_chars: Maximum accepted URL length.
+
+    Returns:
+        Valid normalized URLs in encounter order, including duplicates.
+    """
 
     links: list[str] = []
 
@@ -215,6 +245,8 @@ class _ReadableHtmlParser(HTMLParser):
     )
 
     def __init__(self) -> None:
+        """Initialize text, link, and ignored-element collection state."""
+
         super().__init__(
             convert_charrefs=True
         )
@@ -230,6 +262,13 @@ class _ReadableHtmlParser(HTMLParser):
             tuple[str, str | None]
         ],
     ) -> None:
+        """Collect block boundaries and anchor targets outside ignored tags.
+
+        Args:
+            tag: HTML element name.
+            attrs: Attribute name/value pairs from the start tag.
+        """
+
         normalized_tag = tag.casefold()
 
         if (
@@ -264,6 +303,12 @@ class _ReadableHtmlParser(HTMLParser):
         self,
         tag: str,
     ) -> None:
+        """Close ignored elements and preserve readable block boundaries.
+
+        Args:
+            tag: HTML element name.
+        """
+
         normalized_tag = tag.casefold()
 
         if (
@@ -289,6 +334,13 @@ class _ReadableHtmlParser(HTMLParser):
             tuple[str, str | None]
         ],
     ) -> None:
+        """Process a self-closing element as a matching start/end pair.
+
+        Args:
+            tag: HTML element name.
+            attrs: Attribute name/value pairs from the element.
+        """
+
         self.handle_starttag(
             tag,
             attrs,
@@ -301,6 +353,12 @@ class _ReadableHtmlParser(HTMLParser):
         self,
         data: str,
     ) -> None:
+        """Collect character data that is outside ignored elements.
+
+        Args:
+            data: Decoded character data emitted by ``HTMLParser``.
+        """
+
         if not self.ignored_depth:
             self.text_chunks.append(
                 data
@@ -312,7 +370,18 @@ def _parse_html(
     *,
     max_url_chars: int,
 ) -> tuple[str, list[str]]:
-    """Convert HTML to readable text and validated links."""
+    """Convert HTML to readable text and validated links.
+
+    Args:
+        html_content: Decoded HTML document or fragment.
+        max_url_chars: Maximum accepted URL length.
+
+    Returns:
+        Normalized readable text and links from anchors and visible text.
+
+    Raises:
+        ContentParsingError: If the HTML parser fails.
+    """
 
     parser = _ReadableHtmlParser()
 
@@ -366,7 +435,15 @@ def _deduplicate_links(
     *,
     max_links: int,
 ) -> tuple[str, ...]:
-    """Deduplicate links while preserving their order."""
+    """Deduplicate links while preserving their order.
+
+    Args:
+        links: Ordered normalized links.
+        max_links: Maximum unique links to retain.
+
+    Returns:
+        The bounded tuple of first-seen unique links.
+    """
 
     unique_links: list[str] = []
     seen_links: set[str] = set()
@@ -389,7 +466,13 @@ def _deduplicate_links(
 
 
 class MessageContentParser:
-    """Select readable message text and extract safe links."""
+    """Select readable message text and extract bounded, validated links.
+
+    Attributes:
+        max_text_chars: Maximum accepted length of selected readable text.
+        max_links: Maximum number of unique links returned.
+        max_url_chars: Maximum length accepted for each URL.
+    """
 
     SUPPORTED_MIME_TYPES = frozenset(
         {
@@ -415,6 +498,17 @@ class MessageContentParser:
             DEFAULT_MAX_URL_CHARS
         ),
     ) -> None:
+        """Configure positive limits for parsing text and links.
+
+        Args:
+            max_text_chars: Maximum selected-text length.
+            max_links: Maximum unique-link count.
+            max_url_chars: Maximum accepted URL length.
+
+        Raises:
+            ValueError: If any limit is not a positive integer.
+        """
+
         limits = {
             "max_text_chars": (
                 max_text_chars
@@ -450,7 +544,19 @@ class MessageContentParser:
             DecodedTextPart
         ],
     ) -> ExtractedMessageContent:
-        """Select text and links from decoded MIME parts."""
+        """Select text and links from decoded MIME parts.
+
+        Args:
+            parts: Decoded text parts from one Gmail message.
+
+        Returns:
+            The longest plain-text candidate, or longest readable HTML fallback,
+            together with deduplicated links and its source MIME type.
+
+        Raises:
+            ContentParsingError: If parts are invalid, no readable text exists,
+                HTML parsing fails, or the selected text exceeds its limit.
+        """
 
         if (
             isinstance(parts, (str, bytes))

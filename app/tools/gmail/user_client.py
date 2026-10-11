@@ -1,3 +1,10 @@
+"""Wrap Gmail API operations on the authenticated ``users`` resource.
+
+The adapter exposes profile retrieval and push-notification controls while
+converting unexpected Google client failures into ``UsersClientError`` and
+recording diagnostic context in the application log.
+"""
+
 import sys
 
 from typing import Any, Dict
@@ -8,41 +15,36 @@ from app.tools.logger import AppLogger
 
 
 class UsersClientError(Exception):
-    """
-    Custom exception class for UsersClient errors.
-    Raised when UsersClient encounters an unexpected error.
-    """
+    """Raised when a Gmail users-resource request fails."""
+
     pass
 
 
 class UsersClient:
-    """
-    Client for interacting with Gmail 'users' resource.
+    """Call Gmail operations scoped to the authenticated user.
 
-    Provides methods to get the user's profile, stop push notifications,
-    and configure/watch for Gmail inbox changes.
+    Attributes:
+        service: Authorized Gmail API discovery resource.
+        logger: File logger for request diagnostics.
     """
 
     def __init__(self, service: Resource) -> None:
-        """
-        Initialize UsersClient with Gmail API service and optional logger.
+        """Initialize the users-resource adapter.
 
         Args:
-            service (Resource): Authorized Gmail API service object.
-            logger (AppLogger, optional): Logger instance. Defaults to a new AppLogger.
+            service: Authorized Gmail API discovery resource.
         """
         self.service: Resource = service
         self.logger: AppLogger = AppLogger("users_client.log")
 
     def get_profile(self, user_id: str = "me") -> Dict[str, Any]:
-        """
-        Get the Gmail profile of the specified user.
+        """Retrieve the Gmail profile for a user identifier.
 
         Args:
-            user_id (str): User identifier. Use "me" for the authenticated user.
+            user_id: User identifier; ``"me"`` selects the authenticated user.
 
         Returns:
-            Dict[str, Any]: User profile information.
+            The Gmail API profile response.
 
         Raises:
             UsersClientError: If the request fails.
@@ -59,14 +61,13 @@ class UsersClient:
             raise UsersClientError("Failed to get user profile") from e
 
     def stop_notifications(self, user_id: str = "me") -> Dict[str, Any]:
-        """
-        Stop push notifications for the user's inbox.
+        """Stop Gmail push notifications for a user.
 
         Args:
-            user_id (str): User identifier. Use "me" for the authenticated user.
+            user_id: User identifier; ``"me"`` selects the authenticated user.
 
         Returns:
-            Dict[str, Any]: Response from Gmail API.
+            The Gmail API stop response.
 
         Raises:
             UsersClientError: If stopping notifications fails.
@@ -82,16 +83,20 @@ class UsersClient:
                 f"Unexpected error in '{function_name}' at line {line_number}: {e}")
             raise UsersClientError("Failed to stop notifications") from e
 
-    def watch_inbox(self, user_id: str = "me", body: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Configure or update a watch on the user's inbox for push notifications.
+    def watch_inbox(
+        self,
+        user_id: str = "me",
+        body: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Configure or update Gmail push notifications for a user.
 
         Args:
-            user_id (str): User identifier. Use "me" for the authenticated user.
-            body (Dict[str, Any]): Request body for watch configuration (e.g., topic name, label filters).
+            user_id: User identifier; ``"me"`` selects the authenticated user.
+            body: Watch configuration, such as topic and label filters. An
+                omitted value sends an empty request body.
 
         Returns:
-            Dict[str, Any]: Response from Gmail API.
+            The Gmail API watch response.
 
         Raises:
             UsersClientError: If setting up the watch fails.

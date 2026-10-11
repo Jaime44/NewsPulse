@@ -1,3 +1,10 @@
+"""Persist parsed Gmail content for a bounded retention period.
+
+The repository validates readable text, the extracted-link collection, MIME
+provenance, and timezone-aware retention timestamps before storing one content
+record per registered Gmail message.
+"""
+
 from __future__ import annotations
 
 import json
@@ -45,7 +52,17 @@ SUPPORTED_MIME_TYPES = frozenset(
 def _as_utc(
     value: datetime,
 ) -> datetime:
-    """Validate and normalize an aware timestamp to UTC."""
+    """Validate and normalize an aware timestamp to UTC.
+
+    Args:
+        value: Timestamp to validate and normalize.
+
+    Returns:
+        The equivalent timezone-aware UTC timestamp.
+
+    Raises:
+        MessageContentStoreError: If ``value`` is not a timezone-aware datetime.
+    """
 
     if (
         not isinstance(value, datetime)
@@ -65,7 +82,18 @@ def _as_utc(
 def _from_iso(
     value: object,
 ) -> datetime:
-    """Load and validate one stored ISO timestamp."""
+    """Load and validate one stored ISO timestamp.
+
+    Args:
+        value: Stored value expected to contain ISO datetime text.
+
+    Returns:
+        The parsed timezone-aware UTC timestamp.
+
+    Raises:
+        MessageContentStoreError: If the stored value is not valid aware ISO
+            datetime text.
+    """
 
     if not isinstance(value, str):
         raise MessageContentStoreError(
@@ -89,7 +117,17 @@ def _from_iso(
 def _normalize_identifier(
     value: object,
 ) -> str:
-    """Validate one Gmail message identifier."""
+    """Validate one Gmail message identifier.
+
+    Args:
+        value: Candidate Gmail message identifier.
+
+    Returns:
+        The stripped non-empty identifier.
+
+    Raises:
+        MessageContentStoreError: If the value is not a non-empty string.
+    """
 
     if not isinstance(value, str):
         raise MessageContentStoreError(
@@ -109,7 +147,17 @@ def _normalize_identifier(
 def _normalize_text(
     value: object,
 ) -> str:
-    """Validate readable message text."""
+    """Validate readable message text.
+
+    Args:
+        value: Candidate readable text.
+
+    Returns:
+        The stripped non-empty content text.
+
+    Raises:
+        MessageContentStoreError: If the value is not a non-empty string.
+    """
 
     if not isinstance(value, str):
         raise MessageContentStoreError(
@@ -129,7 +177,17 @@ def _normalize_text(
 def _normalize_links(
     links: Sequence[str],
 ) -> tuple[str, ...]:
-    """Validate and deduplicate extracted links."""
+    """Validate and deduplicate extracted links.
+
+    Args:
+        links: Ordered link strings extracted from message content.
+
+    Returns:
+        Unique stripped links in first-seen order.
+
+    Raises:
+        MessageContentStoreError: If the collection or an item is invalid.
+    """
 
     if (
         isinstance(links, (str, bytes))
@@ -174,7 +232,17 @@ def _normalize_links(
 def _normalize_mime_type(
     value: object,
 ) -> str:
-    """Validate the MIME type selected by the parser."""
+    """Validate the MIME type selected by the parser.
+
+    Args:
+        value: Candidate source MIME type.
+
+    Returns:
+        The normalized supported MIME type.
+
+    Raises:
+        MessageContentStoreError: If the value is not supported text MIME data.
+    """
 
     if not isinstance(value, str):
         raise MessageContentStoreError(
@@ -199,7 +267,18 @@ def _normalize_mime_type(
 def _content_from_row(
     row: sqlite3.Row,
 ) -> StoredMessageContent:
-    """Convert one database row into stored content."""
+    """Convert one database row into stored content.
+
+    Args:
+        row: Joined content and Gmail-message row.
+
+    Returns:
+        The validated immutable content record.
+
+    Raises:
+        MessageContentStoreError: If links, timestamps, text, MIME type, or
+            retention ordering in the stored row is invalid.
+    """
 
     try:
         links_data = json.loads(
@@ -262,7 +341,12 @@ def _content_from_row(
 
 
 class MessageContentStore:
-    """Persist readable message content with bounded retention."""
+    """Persist readable message content with bounded retention.
+
+    Attributes:
+        database: SQLite connection and schema factory.
+        retention_days: Number of days each content record remains eligible.
+    """
 
     ACCOUNT_ID = (
         OAuthCredentialStore.ACCOUNT_ID
@@ -274,6 +358,16 @@ class MessageContentStore:
         *,
         retention_days: int,
     ) -> None:
+        """Validate retention and initialize the content schema.
+
+        Args:
+            database: Configured SQLite database factory.
+            retention_days: Positive number of days to retain parsed content.
+
+        Raises:
+            ValueError: If ``retention_days`` is not a positive integer.
+        """
+
         if (
             isinstance(retention_days, bool)
             or not isinstance(
@@ -302,7 +396,22 @@ class MessageContentStore:
         source_mime_type: str,
         extracted_at: datetime | None = None,
     ) -> StoredMessageContent:
-        """Create or replace the content for one registered message."""
+        """Create or replace the content for one registered message.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            text: Non-empty readable content.
+            links: Ordered links extracted from the content.
+            source_mime_type: Selected ``text/plain`` or ``text/html`` type.
+            extracted_at: Optional timezone-aware extraction timestamp.
+
+        Returns:
+            The normalized content and calculated retention timestamps.
+
+        Raises:
+            MessageContentStoreError: If data is invalid or the parent message
+                has not been registered.
+        """
 
         message_id = _normalize_identifier(
             gmail_message_id
@@ -409,7 +518,14 @@ class MessageContentStore:
         self,
         gmail_message_id: str,
     ) -> StoredMessageContent | None:
-        """Load content for one registered Gmail message."""
+        """Load content for one registered Gmail message.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+
+        Returns:
+            The validated content record, or ``None`` if no content is stored.
+        """
 
         message_id = _normalize_identifier(
             gmail_message_id
@@ -451,7 +567,14 @@ class MessageContentStore:
         self,
         expired_at: datetime | None = None,
     ) -> int:
-        """Delete content whose retention period has ended."""
+        """Delete content whose retention period has ended.
+
+        Args:
+            expired_at: Optional timezone-aware retention cutoff.
+
+        Returns:
+            Number of content rows deleted for the configured account.
+        """
 
         expiration_limit = _as_utc(
             expired_at

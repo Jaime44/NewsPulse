@@ -1,3 +1,10 @@
+"""Coordinate one incremental Gmail discovery and processing scan.
+
+The ingestion service derives a Gmail ``after:`` query from the durable cursor,
+registers unseen messages, resolves newsletter classifications, processes
+content for newsletters, and advances the cursor only after a complete scan.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -33,6 +40,8 @@ class GmailIngestionError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class IngestionScanResult:
+    """Summarize cursor movement and message counts for a completed scan."""
+
     scan_started_at: datetime
     cursor_before: datetime
     cursor_after: datetime
@@ -47,10 +56,28 @@ class IngestionScanResult:
 
 
 def _utc_now() -> datetime:
+    """Return the current timezone-aware UTC timestamp.
+
+    Returns:
+        The current time in UTC.
+    """
+
     return datetime.now(timezone.utc)
 
 
 def _as_utc(value: datetime) -> datetime:
+    """Validate an ingestion timestamp and normalize it to UTC.
+
+    Args:
+        value: Timestamp returned by the configured ingestion clock.
+
+    Returns:
+        The equivalent timezone-aware UTC timestamp.
+
+    Raises:
+        GmailIngestionError: If ``value`` is not timezone-aware.
+    """
+
     if (
         not isinstance(value, datetime)
         or value.tzinfo is None
@@ -65,7 +92,16 @@ def _as_utc(value: datetime) -> datetime:
 
 
 class GmailIngestionService:
-    """Coordinate incremental Gmail discovery and classification."""
+    """Coordinate incremental Gmail discovery, classification, and content.
+
+    Attributes:
+        gmail_client: High-level Gmail API adapter.
+        store: Durable cursor and message-state repository.
+        classification_service: Stored-rule and heuristic decision service.
+        content_processing_service: MIME decoding, parsing, and persistence
+            pipeline used for messages classified as newsletters.
+        clock: Injectable timezone-aware scan clock.
+    """
 
     CURSOR_OVERLAP_SECONDS = 1
 
@@ -81,6 +117,16 @@ class GmailIngestionService:
         ),
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
+        """Bind the Gmail, persistence, classification, and content services.
+
+        Args:
+            gmail_client: High-level Gmail API adapter.
+            store: Ingestion-state repository.
+            classification_service: Newsletter decision service.
+            content_processing_service: Readable-content pipeline.
+            clock: Callable that supplies the scan timestamp.
+        """
+
         self.gmail_client = gmail_client
         self.store = store
         self.classification_service = (
@@ -99,6 +145,19 @@ class GmailIngestionService:
         cls,
         cursor: datetime,
     ) -> str:
+        """Build an overlapping Gmail epoch query from the cursor.
+
+        Args:
+            cursor: Last durable scan cursor.
+
+        Returns:
+            A Gmail ``after:`` query one second before the cursor, bounded at
+            the Unix epoch.
+
+        Raises:
+            GmailIngestionError: If the cursor is timezone-naive.
+        """
+
         normalized_cursor = _as_utc(cursor)
 
         epoch_seconds = max(
@@ -116,7 +175,17 @@ class GmailIngestionService:
         user_id: str,
         processing_at: datetime,
     ) -> None:
-        """Process one newsletter with retryable state transitions."""
+        """Process one newsletter with retryable state transitions.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            user_id: Gmail user identifier used for content retrieval.
+            processing_at: Timestamp recorded for all processing transitions.
+
+        Raises:
+            MessageContentProcessingError: If content processing fails after the
+                message has been marked with a safe failure code.
+        """
 
         self.store.mark_message_processing(
             gmail_message_id,
@@ -154,7 +223,23 @@ class GmailIngestionService:
         page_size: int = 100,
         label_ids: Sequence[str] | None = None,
     ) -> IngestionScanResult:
-        """Discover, classify and persist Gmail messages."""
+        """Discover, classify, and persist Gmail messages.
+
+        Args:
+            user_id: Gmail user identifier used for all API calls.
+            total_limit: Maximum references accepted for a complete scan.
+            page_size: Requested Gmail page size.
+            label_ids: Optional Gmail labels used to filter discovery.
+
+        Returns:
+            Cursor movement, query, and classification counts for the completed
+            scan.
+
+        Raises:
+            GmailIngestionError: If any discovery, validation, persistence,
+                classification, or content-processing stage fails. The durable
+                cursor is not advanced on failure.
+        """
 
         scan_started_at = _as_utc(
             self.clock()

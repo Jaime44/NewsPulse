@@ -1,3 +1,5 @@
+"""Test retry behavior across ingestion services and SQLite persistence."""
+
 from __future__ import annotations
 
 import unittest
@@ -46,13 +48,26 @@ RETRY_SCAN_AT = (
 
 
 def _timestamp_ms(value: datetime) -> int:
+    """Convert a timestamp to Gmail's millisecond epoch format.
+
+    Args:
+        value: Timestamp to convert.
+
+    Returns:
+        The Unix timestamp in milliseconds.
+    """
+
     return int(value.timestamp() * 1_000)
 
 
 class GmailIngestionIntegrationTests(
     unittest.TestCase
 ):
+    """Verify retry semantics against persistent ingestion state."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = (
             TemporaryDirectory()
         )
@@ -133,9 +148,13 @@ class GmailIngestionIntegrationTests(
         ) = self.references
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def _insert_account(self) -> None:
+        """Insert the single authenticated account required by the fixture."""
+
         timestamp = FIRST_SCAN_AT.isoformat()
 
         with self.database.connect() as connection:
@@ -163,6 +182,15 @@ class GmailIngestionIntegrationTests(
         self,
         scan_time: datetime,
     ) -> GmailIngestionService:
+        """Build an ingestion service with a fixed scan clock.
+
+        Args:
+            scan_time: Timestamp returned by the injected clock.
+
+        Returns:
+            The configured ingestion service.
+        """
+
         service = GmailIngestionService(
             gmail_client=self.gmail_client,
             store=self.store,
@@ -179,6 +207,8 @@ class GmailIngestionIntegrationTests(
     def test_partial_failure_can_be_retried(
         self,
     ) -> None:
+        """Verify that partial failure can be retried."""
+
         first_service = self._service_at(
             FIRST_SCAN_AT
         )

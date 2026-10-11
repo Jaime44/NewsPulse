@@ -1,3 +1,5 @@
+"""Test content-processing decisions within incremental Gmail scans."""
+
 from __future__ import annotations
 
 import unittest
@@ -47,6 +49,15 @@ SCAN_STARTED_AT = (
 def _timestamp_ms(
     value: datetime,
 ) -> int:
+    """Convert a timestamp to Gmail's millisecond epoch format.
+
+    Args:
+        value: Timestamp to convert.
+
+    Returns:
+        The Unix timestamp in milliseconds.
+    """
+
     return int(
         value.timestamp() * 1_000
     )
@@ -55,7 +66,11 @@ def _timestamp_ms(
 class GmailIngestionContentTests(
     unittest.TestCase
 ):
+    """Verify content processing for each classification outcome."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.gmail_client = Mock()
         self.store = Mock()
         self.classification_service = Mock()
@@ -148,6 +163,13 @@ class GmailIngestionContentTests(
         *,
         score: int,
     ) -> None:
+        """Configure the classification fixture for one verdict.
+
+        Args:
+            verdict: Classification outcome returned by the mocked service.
+            score: Classification score returned by the mocked service.
+        """
+
         (
             self.classification_service
             .classify
@@ -161,6 +183,8 @@ class GmailIngestionContentTests(
     def test_new_newsletter_content_is_processed(
         self,
     ) -> None:
+        """Verify that new newsletter content is processed."""
+
         self.configure_verdict(
             NewsletterVerdict.NEWSLETTER,
             score=5,
@@ -241,6 +265,8 @@ class GmailIngestionContentTests(
     def test_review_message_content_is_not_processed(
         self,
     ) -> None:
+        """Verify that review message content is not processed."""
+
         self.configure_verdict(
             NewsletterVerdict.REVIEW,
             score=2,
@@ -285,6 +311,8 @@ class GmailIngestionContentTests(
     def test_non_newsletter_content_is_not_processed(
         self,
     ) -> None:
+        """Verify that non newsletter content is not processed."""
+
         self.configure_verdict(
             NewsletterVerdict.NOT_NEWSLETTER,
             score=0,
@@ -329,6 +357,8 @@ class GmailIngestionContentTests(
     def test_content_failure_marks_message_failed(
         self,
     ) -> None:
+        """Verify that content failure marks message failed."""
+
         self.configure_verdict(
             NewsletterVerdict.NEWSLETTER,
             score=5,
@@ -412,6 +442,8 @@ class GmailIngestionContentTests(
     def test_failed_newsletter_content_is_retried(
         self,
     ) -> None:
+        """Verify that failed newsletter content is retried."""
+
         stored_classification = Mock()
         stored_classification.verdict = (
             "newsletter"
@@ -503,6 +535,8 @@ class GmailIngestionContentTests(
     def test_processed_newsletter_is_not_downloaded_again(
         self,
     ) -> None:
+        """Verify that processed newsletter is not downloaded again."""
+
         stored_classification = Mock()
         stored_classification.verdict = (
             "newsletter"
@@ -574,6 +608,8 @@ class GmailIngestionContentTests(
     def test_scan_purges_expired_content(
         self,
     ) -> None:
+        """Verify that scan purges expired content."""
+
         (
             self.gmail_client
             .list_message_references
@@ -614,6 +650,8 @@ class GmailIngestionContentTests(
     def test_purge_failure_stops_scan_before_gmail(
         self,
     ) -> None:
+        """Verify that purge failure stops scan before Gmail."""
+
         purge_error = (
             MessageContentProcessingError(
                 "sensitive-purge-detail"

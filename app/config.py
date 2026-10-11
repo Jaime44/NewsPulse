@@ -1,3 +1,10 @@
+"""Load and validate the environment-backed NewsPulse configuration.
+
+This module resolves application paths relative to the project root, validates
+runtime settings, and exposes the immutable :class:`AppConfig` consumed by the
+Flask entry point and persistence services.
+"""
+
 from __future__ import annotations
 
 import os
@@ -18,6 +25,18 @@ class ConfigurationError(RuntimeError):
 
 
 def _required(name: str) -> str:
+    """Return a required, non-empty environment variable.
+
+    Args:
+        name: Name of the environment variable to read.
+
+    Returns:
+        The stripped environment value.
+
+    Raises:
+        ConfigurationError: If the variable is unset or empty.
+    """
+
     value = os.getenv(name, "").strip()
 
     if not value:
@@ -29,6 +48,18 @@ def _required(name: str) -> str:
 
 
 def _resolve_path(name: str) -> Path:
+    """Resolve a configured path against the project root.
+
+    Args:
+        name: Name of the required path environment variable.
+
+    Returns:
+        An absolute, normalized path.
+
+    Raises:
+        ConfigurationError: If the variable is unset or empty.
+    """
+
     path = Path(_required(name)).expanduser()
 
     if not path.is_absolute():
@@ -38,6 +69,18 @@ def _resolve_path(name: str) -> Path:
 
 
 def _required_file(name: str) -> Path:
+    """Resolve a required configuration value to an existing file.
+
+    Args:
+        name: Name of the environment variable containing the path.
+
+    Returns:
+        The absolute path to the configured file.
+
+    Raises:
+        ConfigurationError: If the setting is missing or is not a file.
+    """
+
     path = _resolve_path(name)
 
     if not path.is_file():
@@ -49,6 +92,19 @@ def _required_file(name: str) -> Path:
 
 
 def _positive_int(name: str, default: str) -> int:
+    """Read a positive integer from the environment.
+
+    Args:
+        name: Name of the environment variable to read.
+        default: String value used when the variable is absent.
+
+    Returns:
+        The parsed positive integer.
+
+    Raises:
+        ConfigurationError: If the value is not a positive integer.
+    """
+
     raw_value = os.getenv(name, default).strip()
 
     try:
@@ -67,6 +123,19 @@ def _positive_int(name: str, default: str) -> int:
 
 
 def _boolean(name: str, default: str = "false") -> bool:
+    """Read a strict ``true`` or ``false`` environment option.
+
+    Args:
+        name: Name of the environment variable to read.
+        default: String value used when the variable is absent.
+
+    Returns:
+        ``True`` only when the normalized value is ``"true"``.
+
+    Raises:
+        ConfigurationError: If the value is neither ``true`` nor ``false``.
+    """
+
     value = os.getenv(name, default).strip().lower()
 
     if value not in {"true", "false"}:
@@ -79,6 +148,23 @@ def _boolean(name: str, default: str = "false") -> bool:
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
+    """Hold validated runtime settings for one NewsPulse process.
+
+    Attributes:
+        environment: Deployment environment name.
+        host: Interface on which the development server listens.
+        port: TCP port used by the development server.
+        timezone: Valid IANA timezone name used by the application.
+        debug: Whether Flask debug mode is enabled.
+        google_credentials_path: OAuth web-client JSON file.
+        google_redirect_uri: Authorized OAuth callback URI.
+        google_scopes: OAuth scopes requested from Google.
+        flask_secret_key_path: File containing the Flask signing key.
+        token_encryption_key_path: File containing the Fernet key.
+        database_path: SQLite database location.
+        retention_days: Lifetime of persisted readable message content.
+    """
+
     environment: str
     host: str
     port: int
@@ -100,6 +186,22 @@ class AppConfig:
         cls,
         env_file: Path | None = None,
     ) -> "AppConfig":
+        """Load an environment file and validate all application settings.
+
+        Args:
+            env_file: Optional dotenv file; defaults to the project ``.env``.
+
+        Returns:
+            A fully validated immutable configuration object.
+
+        Raises:
+            ConfigurationError: If the file or any required setting is invalid.
+
+        Notes:
+            Existing process environment variables take precedence because the
+            dotenv loader is called with ``override=False``.
+        """
+
         selected_env_file = env_file or DEFAULT_ENV_FILE
 
         if not selected_env_file.is_file():
@@ -167,6 +269,19 @@ class AppConfig:
 
 
 def read_secret_file(path: Path) -> str:
+    """Read a non-empty secret from a UTF-8 text file.
+
+    Args:
+        path: File containing the secret value.
+
+    Returns:
+        The stripped secret.
+
+    Raises:
+        OSError: If the file cannot be read.
+        ConfigurationError: If the file contains no non-whitespace value.
+    """
+
     value = path.read_text(encoding="utf-8").strip()
 
     if not value:

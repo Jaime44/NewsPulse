@@ -1,3 +1,5 @@
+"""Test SQLite constraints and cascades for retained message content."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -14,7 +16,11 @@ EXPIRES_AT = "2026-11-07T10:00:00+00:00"
 
 
 class MessageContentSchemaTests(unittest.TestCase):
+    """Verify retained-content schema constraints and cascades."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = TemporaryDirectory()
 
         database_path = (
@@ -26,12 +32,20 @@ class MessageContentSchemaTests(unittest.TestCase):
         self.database.initialize()
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     @staticmethod
     def insert_account(
         connection: sqlite3.Connection,
     ) -> None:
+        """Insert the single authenticated account required by the fixture.
+
+        Args:
+            connection: Open SQLite connection receiving the account row.
+        """
+
         connection.execute(
             """
             INSERT INTO oauth_credentials (
@@ -56,6 +70,15 @@ class MessageContentSchemaTests(unittest.TestCase):
     def insert_message(
         connection: sqlite3.Connection,
     ) -> int:
+        """Insert a Gmail message required by the database fixture.
+
+        Args:
+            connection: Open SQLite connection receiving the message row.
+
+        Returns:
+            The generated Gmail message row identifier.
+        """
+
         cursor = connection.execute(
             """
             INSERT INTO gmail_messages (
@@ -99,6 +122,18 @@ class MessageContentSchemaTests(unittest.TestCase):
         extracted_at: str = EXTRACTED_AT,
         expires_at: str = EXPIRES_AT,
     ) -> None:
+        """Insert retained content required by the database fixture.
+
+        Args:
+            connection: Open SQLite connection receiving the content row.
+            gmail_message_row_id: Parent Gmail message row identifier.
+            text_content: Readable message text.
+            links_json: JSON array of extracted links.
+            source_mime_type: MIME type selected by the parser.
+            extracted_at: ISO timestamp for content extraction.
+            expires_at: ISO timestamp for retention expiry.
+        """
+
         connection.execute(
             """
             INSERT INTO message_contents (
@@ -124,6 +159,8 @@ class MessageContentSchemaTests(unittest.TestCase):
     def test_schema_creates_content_table_and_index(
         self,
     ) -> None:
+        """Verify that schema creates content table and index."""
+
         with self.database.connect() as connection:
             table = connection.execute(
                 """
@@ -175,6 +212,8 @@ class MessageContentSchemaTests(unittest.TestCase):
     def test_content_constraints_reject_invalid_data(
         self,
     ) -> None:
+        """Verify that content constraints reject invalid data."""
+
         with self.database.connect() as connection:
             self.insert_account(connection)
 
@@ -310,6 +349,8 @@ class MessageContentSchemaTests(unittest.TestCase):
     def test_deleting_account_removes_message_content(
         self,
     ) -> None:
+        """Verify that deleting account removes message content."""
+
         with self.database.connect() as connection:
             self.insert_account(connection)
 

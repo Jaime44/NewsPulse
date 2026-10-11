@@ -1,3 +1,5 @@
+"""Test readable-text selection, HTML parsing, URL normalization, and limits."""
+
 from __future__ import annotations
 
 import unittest
@@ -15,7 +17,11 @@ from app.backend.services.message_content import (
 class MessageContentParserTests(
     unittest.TestCase
 ):
+    """Verify readable content selection and validated link extraction."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.parser = (
             MessageContentParser()
         )
@@ -23,6 +29,8 @@ class MessageContentParserTests(
     def test_plain_text_is_preferred_and_links_are_deduplicated(
         self,
     ) -> None:
+        """Verify that plain text is preferred and links are deduplicated."""
+
         parts = (
             DecodedTextPart(
                 mime_type="text/plain",
@@ -67,6 +75,8 @@ class MessageContentParserTests(
     def test_html_is_used_when_plain_text_is_missing(
         self,
     ) -> None:
+        """Verify that HTML is used when plain text is missing."""
+
         html = (
             "<html>"
             "<head>"
@@ -126,6 +136,8 @@ class MessageContentParserTests(
     def test_longest_plain_part_is_selected(
         self,
     ) -> None:
+        """Verify that longest plain part is selected."""
+
         result = self.parser.parse(
             (
                 DecodedTextPart(
@@ -161,6 +173,8 @@ class MessageContentParserTests(
     def test_plain_urls_are_normalized_in_order(
         self,
     ) -> None:
+        """Verify that plain URLs are normalized in order."""
+
         text = (
             "Uno https://example.com/a). "
             "Dos HTTP://EXAMPLE.COM/b?x=1! "
@@ -187,6 +201,8 @@ class MessageContentParserTests(
     def test_invalid_or_empty_parts_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid or empty parts are rejected."""
+
         invalid_values = (
             "invalid",
             (),
@@ -221,6 +237,8 @@ class MessageContentParserTests(
     def test_text_limit_is_enforced(
         self,
     ) -> None:
+        """Verify that text limit is enforced."""
+
         parser = MessageContentParser(
             max_text_chars=5,
         )
@@ -248,6 +266,8 @@ class MessageContentParserTests(
     def test_link_limit_is_enforced(
         self,
     ) -> None:
+        """Verify that link limit is enforced."""
+
         parser = MessageContentParser(
             max_links=2,
         )
@@ -276,6 +296,8 @@ class MessageContentParserTests(
     def test_invalid_limits_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid limits are rejected."""
+
         invalid_limits = (
             {
                 "max_text_chars": 0,

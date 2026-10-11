@@ -1,3 +1,5 @@
+"""Test encrypted storage and lifecycle operations for OAuth credentials."""
+
 from __future__ import annotations
 
 import unittest
@@ -13,7 +15,11 @@ from app.backend.bd.oauth_store import OAuthCredentialStore
 
 
 class OAuthCredentialStoreTests(unittest.TestCase):
+    """Verify encrypted OAuth credential persistence and deletion."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = TemporaryDirectory()
         self.directory = Path(
             self.temporary_directory.name
@@ -46,9 +52,13 @@ class OAuthCredentialStoreTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def test_save_and_load_credentials(self) -> None:
+        """Verify that credentials can be saved and reconstructed."""
+
         self.store.save(
             email="Owner@Example.com",
             credentials=self.credentials,
@@ -68,6 +78,8 @@ class OAuthCredentialStoreTests(unittest.TestCase):
         )
 
     def test_sensitive_values_are_encrypted_at_rest(self) -> None:
+        """Verify that sensitive values are encrypted at rest."""
+
         self.store.save(
             email="owner@example.com",
             credentials=self.credentials,
@@ -89,6 +101,8 @@ class OAuthCredentialStoreTests(unittest.TestCase):
         )
 
     def test_mark_credentials_as_revoked(self) -> None:
+        """Verify that stored credentials can be marked as revoked."""
+
         self.store.save(
             email="owner@example.com",
             credentials=self.credentials,
@@ -103,6 +117,8 @@ class OAuthCredentialStoreTests(unittest.TestCase):
         self.assertTrue(stored.revoked)
 
     def test_delete_credentials(self) -> None:
+        """Verify that stored credentials can be deleted."""
+
         self.store.save(
             email="owner@example.com",
             credentials=self.credentials,

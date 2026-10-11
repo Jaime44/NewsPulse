@@ -1,3 +1,5 @@
+"""Test high-level Gmail pagination and typed response validation."""
+
 from __future__ import annotations
 
 import unittest
@@ -20,7 +22,11 @@ from app.tools.gmail.messages_client import (
 
 
 class GmailClientPaginationTests(unittest.TestCase):
+    """Verify bounded Gmail pagination and reference validation."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.client = GmailClient.__new__(
             GmailClient
         )
@@ -36,6 +42,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_single_page_returns_typed_references(
         self,
     ) -> None:
+        """Verify that single page returns typed references."""
+
         self.list_page.return_value = {
             "messages": [
                 {
@@ -75,6 +83,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_multiple_pages_use_next_page_token(
         self,
     ) -> None:
+        """Verify that multiple pages use next page token."""
+
         self.list_page.side_effect = [
             {
                 "messages": [
@@ -141,6 +151,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_total_limit_stops_pagination(
         self,
     ) -> None:
+        """Verify that total limit stops pagination."""
+
         self.list_page.return_value = {
             "messages": [
                 {
@@ -168,6 +180,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_complete_listing_rejects_remaining_page(
         self,
     ) -> None:
+        """Verify that complete listing rejects remaining page."""
+
         self.list_page.return_value = {
             "messages": [
                 {
@@ -200,6 +214,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_complete_listing_accepts_final_page(
         self,
     ) -> None:
+        """Verify that complete listing accepts final page."""
+
         self.list_page.return_value = {
             "messages": [
                 {
@@ -228,6 +244,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_invalid_limits_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid limits are rejected."""
+
         for invalid_limit in (
             0,
             10_001,
@@ -284,6 +302,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_invalid_responses_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid responses are rejected."""
+
         invalid_responses = (
             None,
             {"messages": {}},
@@ -322,6 +342,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_invalid_pagination_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid pagination is rejected."""
+
         invalid_token_responses = (
             {
                 "messages": [
@@ -377,6 +399,8 @@ class GmailClientPaginationTests(unittest.TestCase):
     def test_client_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that client error is sanitized."""
+
         self.list_page.side_effect = (
             MessagesClientError(
                 "sensitive-lower-level-value"
@@ -410,7 +434,11 @@ class GmailClientPaginationTests(unittest.TestCase):
 
 
 class GmailClientMetadataTests(unittest.TestCase):
+    """Verify typed Gmail metadata parsing and sanitized failures."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.client = GmailClient.__new__(
             GmailClient
         )
@@ -426,6 +454,8 @@ class GmailClientMetadataTests(unittest.TestCase):
     def test_valid_metadata_returns_typed_message(
         self,
     ) -> None:
+        """Verify that valid metadata returns typed message."""
+
         self.get_message.return_value = {
             "id": " message-1 ",
             "threadId": " thread-1 ",
@@ -522,6 +552,8 @@ class GmailClientMetadataTests(unittest.TestCase):
     def test_missing_optional_metadata_returns_none(
         self,
     ) -> None:
+        """Verify that missing optional metadata returns none."""
+
         self.get_message.return_value = {
             "id": "message-1",
             "threadId": "thread-1",
@@ -551,6 +583,8 @@ class GmailClientMetadataTests(unittest.TestCase):
     def test_invalid_metadata_responses_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid metadata responses are rejected."""
+
         valid_base = {
             "id": "message-1",
             "threadId": "thread-1",
@@ -650,6 +684,8 @@ class GmailClientMetadataTests(unittest.TestCase):
     def test_lower_client_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that lower client error is sanitized."""
+
         self.get_message.side_effect = (
             MessagesClientError(
                 "sensitive-lower-level-value"
@@ -687,6 +723,8 @@ class GmailClientMetadataTests(unittest.TestCase):
     def test_unexpected_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that unexpected error is sanitized."""
+
         self.get_message.side_effect = RuntimeError(
             "sensitive-runtime-value"
         )
@@ -726,7 +764,11 @@ class GmailClientMetadataTests(unittest.TestCase):
 class GmailClientFullMessageTests(
     unittest.TestCase
 ):
+    """Verify full-message and nested MIME-tree validation."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.client = GmailClient.__new__(
             GmailClient
         )
@@ -742,6 +784,8 @@ class GmailClientFullMessageTests(
     def test_valid_full_message_returns_typed_tree(
         self,
     ) -> None:
+        """Verify that valid full message returns typed tree."""
+
         self.get_message.return_value = {
             "id": "message-1",
             "threadId": "thread-1",
@@ -842,6 +886,8 @@ class GmailClientFullMessageTests(
     def test_full_message_rejects_invalid_request_values(
         self,
     ) -> None:
+        """Verify that full message rejects invalid request values."""
+
         invalid_arguments = (
             {
                 "message_id": "",
@@ -875,6 +921,8 @@ class GmailClientFullMessageTests(
     def test_invalid_full_messages_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid full messages are rejected."""
+
         valid_part = {
             "mimeType": "text/plain",
             "filename": "",
@@ -964,6 +1012,8 @@ class GmailClientFullMessageTests(
     def test_full_message_enforces_mime_limits(
         self,
     ) -> None:
+        """Verify that full message enforces MIME limits."""
+
         leaf = {
             "mimeType": "text/plain",
             "filename": "",
@@ -1029,6 +1079,8 @@ class GmailClientFullMessageTests(
     def test_full_message_lower_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that full message lower error is sanitized."""
+
         self.get_message.side_effect = (
             MessagesClientError(
                 "sensitive-lower-level-value"
@@ -1066,6 +1118,8 @@ class GmailClientFullMessageTests(
     def test_full_message_unexpected_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that full message unexpected error is sanitized."""
+
         self.get_message.side_effect = RuntimeError(
             "sensitive-runtime-value"
         )
@@ -1105,7 +1159,11 @@ class GmailClientFullMessageTests(
 class GmailClientAttachmentDataTests(
     unittest.TestCase
 ):
+    """Verify typed Gmail attachment-data validation."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.client = GmailClient.__new__(
             GmailClient
         )
@@ -1121,6 +1179,8 @@ class GmailClientAttachmentDataTests(
     def test_valid_attachment_returns_typed_data(
         self,
     ) -> None:
+        """Verify that valid attachment returns typed data."""
+
         self.get_attachment.return_value = {
             "size": 4,
             "data": "SG9sYQ==",
@@ -1148,6 +1208,8 @@ class GmailClientAttachmentDataTests(
     def test_attachment_rejects_invalid_request_values(
         self,
     ) -> None:
+        """Verify that attachment rejects invalid request values."""
+
         invalid_arguments = (
             {
                 "message_id": "",
@@ -1188,6 +1250,8 @@ class GmailClientAttachmentDataTests(
     def test_invalid_attachment_responses_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid attachment responses are rejected."""
+
         invalid_responses = (
             None,
             {},
@@ -1234,6 +1298,8 @@ class GmailClientAttachmentDataTests(
     def test_attachment_lower_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that attachment lower error is sanitized."""
+
         self.get_attachment.side_effect = (
             MessagesClientError(
                 "sensitive-lower-level-value"
@@ -1272,6 +1338,8 @@ class GmailClientAttachmentDataTests(
     def test_attachment_unexpected_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that attachment unexpected error is sanitized."""
+
         self.get_attachment.side_effect = RuntimeError(
             "sensitive-runtime-value"
         )

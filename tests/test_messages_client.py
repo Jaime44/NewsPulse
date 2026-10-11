@@ -1,3 +1,5 @@
+"""Test low-level Gmail message request validation and error sanitization."""
+
 from __future__ import annotations
 
 import unittest
@@ -14,7 +16,11 @@ from app.tools.gmail.messages_client import (
 
 
 class MessagesClientTests(unittest.TestCase):
+    """Verify low-level Gmail message and attachment requests."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.service = Mock()
         self.messages_api = (
             self.service
@@ -49,6 +55,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_list_messages_uses_safe_defaults(
         self,
     ) -> None:
+        """Verify that list messages uses safe defaults."""
+
         response = {
             "messages": [],
         }
@@ -66,6 +74,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_list_messages_forwards_all_filters(
         self,
     ) -> None:
+        """Verify that list messages forwards all filters."""
+
         response = {
             "messages": [
                 {
@@ -105,6 +115,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_invalid_max_results_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid max results is rejected."""
+
         invalid_values = (
             0,
             501,
@@ -126,6 +138,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_invalid_request_values_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid request values are rejected."""
+
         invalid_arguments = (
             {"user_id": " "},
             {"page_token": " "},
@@ -149,6 +163,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_http_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that HTTP error is sanitized."""
+
         http_error = HttpError(
             Response({"status": "429"}),
             (
@@ -185,6 +201,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_unexpected_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that unexpected error is sanitized."""
+
         self.request.execute.side_effect = RuntimeError(
             "sensitive-runtime-value"
         )
@@ -216,6 +234,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_message_uses_metadata_defaults(
         self,
     ) -> None:
+        """Verify that message retrieval uses metadata defaults."""
+
         response = {
             "id": "message-1",
             "threadId": "thread-1",
@@ -236,6 +256,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_message_forwards_metadata_headers(
         self,
     ) -> None:
+        """Verify that message retrieval forwards metadata headers."""
+
         response = {
             "id": "message-1",
         }
@@ -265,6 +287,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_message_rejects_invalid_values(
         self,
     ) -> None:
+        """Verify that message retrieval rejects invalid values."""
+
         invalid_arguments = (
             {"message_id": ""},
             {"message_id": None},
@@ -313,6 +337,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_message_http_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that message-retrieval HTTP errors are sanitized."""
+
         http_error = HttpError(
             Response({"status": "404"}),
             (
@@ -349,6 +375,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_message_unexpected_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that unexpected message-retrieval errors are sanitized."""
+
         self.get_request.execute.side_effect = RuntimeError(
             "sensitive-runtime-value"
         )
@@ -380,6 +408,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_attachment_forwards_identifiers(
         self,
     ) -> None:
+        """Verify that attachment retrieval forwards identifiers."""
+
         response = {
             "size": 12,
             "data": "encoded-data",
@@ -407,6 +437,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_attachment_rejects_invalid_identifiers(
         self,
     ) -> None:
+        """Verify that attachment retrieval rejects invalid identifiers."""
+
         invalid_arguments = (
             {
                 "message_id": "",
@@ -447,6 +479,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_attachment_http_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that attachment-retrieval HTTP errors are sanitized."""
+
         http_error = HttpError(
             Response({"status": "404"}),
             (
@@ -494,6 +528,8 @@ class MessagesClientTests(unittest.TestCase):
     def test_get_attachment_unexpected_error_is_sanitized(
         self,
     ) -> None:
+        """Verify that unexpected attachment-retrieval errors are sanitized."""
+
         self.attachment_request.execute.side_effect = (
             RuntimeError(
                 "sensitive-runtime-value"

@@ -1,3 +1,9 @@
+"""Compose Gmail decoding, parsing, and retained-content persistence.
+
+This service forms the content-processing boundary used by ingestion and maps
+lower-level retrieval, parsing, and storage failures to one stable exception.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -24,7 +30,13 @@ class MessageContentProcessingError(
 
 
 class MessageContentProcessingService:
-    """Decode, parse and persist one Gmail message."""
+    """Decode, parse, and persist readable content for Gmail messages.
+
+    Attributes:
+        content_service: MIME retrieval and decoding service.
+        parser: Readable-text and link extraction service.
+        store: Retained-content repository.
+    """
 
     def __init__(
         self,
@@ -34,6 +46,14 @@ class MessageContentProcessingService:
         parser: MessageContentParser,
         store: MessageContentStore,
     ) -> None:
+        """Bind the three stages of the message-content pipeline.
+
+        Args:
+            content_service: MIME retrieval and decoding service.
+            parser: Readable-text and validated-link parser.
+            store: Parsed-content persistence repository.
+        """
+
         self.content_service = (
             content_service
         )
@@ -44,7 +64,17 @@ class MessageContentProcessingService:
         self,
         expired_at: datetime | None = None,
     ) -> int:
-        """Remove readable content whose retention period ended."""
+        """Remove readable content whose retention period ended.
+
+        Args:
+            expired_at: Optional timezone-aware retention cutoff.
+
+        Returns:
+            Number of deleted content records.
+
+        Raises:
+            MessageContentProcessingError: If the repository rejects the purge.
+        """
 
         try:
             return self.store.purge_expired(
@@ -63,7 +93,20 @@ class MessageContentProcessingService:
         user_id: str = "me",
         extracted_at: datetime | None = None,
     ) -> StoredMessageContent:
-        """Process and persist readable content for one message."""
+        """Process and persist readable content for one message.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            user_id: Gmail user identifier used for retrieval.
+            extracted_at: Optional timezone-aware extraction timestamp.
+
+        Returns:
+            The persisted readable-content record.
+
+        Raises:
+            MessageContentProcessingError: If decoding, parsing, or storage
+                fails.
+        """
 
         try:
             decoded_parts = (

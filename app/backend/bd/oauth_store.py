@@ -1,3 +1,10 @@
+"""Encrypt and persist the single NewsPulse Google OAuth authorization.
+
+The store uses Fernet for credentials at rest and SQLite for durable account
+metadata. Consumers receive Google ``Credentials`` reconstructed from the
+decrypted authorized-user payload.
+"""
+
 from __future__ import annotations
 
 import json
@@ -18,6 +25,8 @@ class OAuthCredentialStoreError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class StoredOAuthCredentials:
+    """Combine persisted account metadata with decrypted Google credentials."""
+
     account_id: int
     email: str
     credentials: Credentials
@@ -27,7 +36,12 @@ class StoredOAuthCredentials:
 
 
 class OAuthCredentialStore:
-    """Persist encrypted OAuth credentials for the single NewsPulse account."""
+    """Persist encrypted OAuth credentials for the single NewsPulse account.
+
+    Attributes:
+        database: SQLite connection and schema factory.
+        cipher: Fernet instance created from the installation encryption key.
+    """
 
     ACCOUNT_ID = 1
 
@@ -36,6 +50,16 @@ class OAuthCredentialStore:
         database: Database,
         encryption_key_path: Path,
     ) -> None:
+        """Load the Fernet key and initialize OAuth persistence.
+
+        Args:
+            database: Configured SQLite database factory.
+            encryption_key_path: File containing a valid Fernet key.
+
+        Raises:
+            OAuthCredentialStoreError: If the key cannot be read or is invalid.
+        """
+
         self.database = database
 
         try:
@@ -61,7 +85,17 @@ class OAuthCredentialStore:
         email: str,
         credentials: Credentials,
     ) -> None:
-        """Encrypt and persist Google OAuth credentials."""
+        """Encrypt and persist Google OAuth credentials.
+
+        Args:
+            email: Account address associated with the authorization.
+            credentials: Google credentials including a refresh token.
+
+        Raises:
+            OAuthCredentialStoreError: If the email is empty or Google supplied
+                no refresh token.
+            sqlite3.Error: If persistence fails.
+        """
 
         normalized_email = email.strip().lower()
 
@@ -111,7 +145,16 @@ class OAuthCredentialStore:
             )
 
     def load(self) -> StoredOAuthCredentials | None:
-        """Load and decrypt the configured Google account."""
+        """Load and decrypt the configured Google account.
+
+        Returns:
+            Stored account metadata and reconstructed credentials, or ``None``
+            when no authorization is present.
+
+        Raises:
+            OAuthCredentialStoreError: If encrypted credentials cannot be
+                decrypted, decoded, or reconstructed.
+        """
 
         with self.database.connect() as connection:
             row = connection.execute(
@@ -165,7 +208,11 @@ class OAuthCredentialStore:
         )
 
     def mark_revoked(self) -> None:
-        """Mark the stored Google authorization as revoked."""
+        """Mark the stored Google authorization as revoked.
+
+        Notes:
+            The update is a no-op when no account row exists.
+        """
 
         now = datetime.now(timezone.utc).isoformat()
 
@@ -184,7 +231,11 @@ class OAuthCredentialStore:
             )
 
     def delete(self) -> None:
-        """Delete the local OAuth authorization."""
+        """Delete the local OAuth authorization.
+
+        Notes:
+            Foreign-key cascades also remove all account-owned ingestion data.
+        """
 
         with self.database.connect() as connection:
             connection.execute(

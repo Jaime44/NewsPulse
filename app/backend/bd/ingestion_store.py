@@ -1,3 +1,10 @@
+"""Persist incremental Gmail discovery, processing, and classification state.
+
+This module maps SQLite rows to immutable domain records and implements the
+single-account ingestion cursor, message lifecycle, and classifier-result
+storage used by :class:`~app.backend.services.gmail_ingestion.GmailIngestionService`.
+"""
+
 from __future__ import annotations
 
 import json
@@ -17,6 +24,8 @@ class IngestionStoreError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class IngestionState:
+    """Represent the durable cursor and timestamps for one Gmail account."""
+
     account_id: int
     started_at: datetime
     last_successful_scan_at: datetime | None
@@ -26,6 +35,8 @@ class IngestionState:
 
 @dataclass(frozen=True, slots=True)
 class StoredGmailMessage:
+    """Represent one Gmail message and its current processing state."""
+
     id: int
     account_id: int
     gmail_message_id: str
@@ -39,6 +50,8 @@ class StoredGmailMessage:
 
 @dataclass(frozen=True, slots=True)
 class StoredMessageClassification:
+    """Represent the persisted classifier decision for one Gmail message."""
+
     gmail_message_row_id: int
     gmail_message_id: str
     verdict: str
@@ -57,7 +70,17 @@ CLASSIFICATION_VERDICTS = frozenset(
 )
 
 def _as_utc(value: datetime) -> datetime:
-    """Validate and normalize an aware timestamp to UTC."""
+    """Validate and normalize an aware timestamp to UTC.
+
+    Args:
+        value: Timestamp to normalize.
+
+    Returns:
+        The equivalent timezone-aware UTC timestamp.
+
+    Raises:
+        IngestionStoreError: If ``value`` has no timezone information.
+    """
 
     if value.tzinfo is None or value.utcoffset() is None:
         raise IngestionStoreError(
@@ -68,7 +91,18 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _from_iso(value: str) -> datetime:
-    """Load an ISO timestamp and normalize it to UTC."""
+    """Parse an ISO timestamp and normalize it to UTC.
+
+    Args:
+        value: ISO-formatted timestamp loaded from SQLite.
+
+    Returns:
+        The parsed timezone-aware UTC timestamp.
+
+    Raises:
+        ValueError: If the value is not valid ISO datetime text.
+        IngestionStoreError: If the parsed timestamp is timezone-naive.
+    """
 
     return _as_utc(datetime.fromisoformat(value))
 
@@ -76,6 +110,15 @@ def _from_iso(value: str) -> datetime:
 def _optional_from_iso(
     value: str | None,
 ) -> datetime | None:
+    """Parse an optional stored ISO timestamp.
+
+    Args:
+        value: ISO-formatted timestamp or ``None``.
+
+    Returns:
+        A timezone-aware UTC timestamp, or ``None``.
+    """
+
     if value is None:
         return None
 
@@ -85,6 +128,15 @@ def _optional_from_iso(
 def _state_from_row(
     row: sqlite3.Row,
 ) -> IngestionState:
+    """Map an ingestion-state row to its immutable domain record.
+
+    Args:
+        row: SQLite row containing all ingestion-state columns.
+
+    Returns:
+        The reconstructed ingestion state.
+    """
+
     return IngestionState(
         account_id=row["account_id"],
         started_at=_from_iso(row["started_at"]),
@@ -100,7 +152,18 @@ def _required_identifier(
     value: str,
     field_name: str,
 ) -> str:
-    """Validate and normalize an external identifier."""
+    """Validate and normalize an external identifier.
+
+    Args:
+        value: Identifier supplied by the caller.
+        field_name: Name included in validation errors.
+
+    Returns:
+        The stripped non-empty identifier.
+
+    Raises:
+        IngestionStoreError: If the identifier is empty.
+    """
 
     normalized_value = value.strip()
 
@@ -115,6 +178,15 @@ def _required_identifier(
 def _message_from_row(
     row: sqlite3.Row,
 ) -> StoredGmailMessage:
+    """Map a Gmail-message row to its immutable domain record.
+
+    Args:
+        row: SQLite row containing all message columns.
+
+    Returns:
+        The reconstructed stored message.
+    """
+
     return StoredGmailMessage(
         id=row["id"],
         account_id=row["account_id"],
@@ -137,6 +209,18 @@ def _message_from_row(
 def _classification_from_row(
     row: sqlite3.Row,
 ) -> StoredMessageClassification:
+    """Map and validate a classification row from SQLite.
+
+    Args:
+        row: Joined classification and Gmail-message row.
+
+    Returns:
+        The reconstructed classification record.
+
+    Raises:
+        IngestionStoreError: If the serialized reason list is malformed.
+    """
+
     try:
         reasons_data = json.loads(
             row["reasons_json"]
@@ -180,6 +264,18 @@ def _classification_from_row(
 def _normalize_classification_reasons(
     reasons: Sequence[str],
 ) -> tuple[str, ...]:
+    """Validate and normalize classifier reason codes.
+
+    Args:
+        reasons: Ordered reason codes produced by the classifier.
+
+    Returns:
+        A tuple of stripped, non-empty reason strings.
+
+    Raises:
+        IngestionStoreError: If the collection or an item is invalid.
+    """
+
     if isinstance(reasons, (str, bytes)):
         raise IngestionStoreError(
             "classification reasons must "
@@ -205,7 +301,14 @@ def _normalize_classification_reasons(
     return tuple(normalized_reasons)
 
 class IngestionStore:
-    """Persist incremental Gmail ingestion state."""
+    """Persist single-account Gmail ingestion state and message transitions.
+
+    The store owns the durable scan cursor, idempotent message registration,
+    processing statuses, and explainable classification records.
+
+    Attributes:
+        database: SQLite connection and schema factory.
+    """
 
     ACCOUNT_ID = OAuthCredentialStore.ACCOUNT_ID
 
@@ -213,11 +316,21 @@ class IngestionStore:
         self,
         database: Database,
     ) -> None:
+        """Initialize the schema used by the ingestion repository.
+
+        Args:
+            database: Configured SQLite database factory.
+        """
+
         self.database = database
         self.database.initialize()
 
     def load_state(self) -> IngestionState | None:
-        """Load the ingestion state for the configured account."""
+        """Load the ingestion state for the configured account.
+
+        Returns:
+            The durable state, or ``None`` if ingestion has not been initialized.
+        """
 
         with self.database.connect() as connection:
             row = connection.execute(
@@ -243,7 +356,19 @@ class IngestionStore:
         self,
         started_at: datetime | None = None,
     ) -> IngestionState:
-        """Create the initial cursor once, or return it unchanged."""
+        """Create the initial cursor once, or return it unchanged.
+
+        Args:
+            started_at: Optional timezone-aware initial cursor. The current UTC
+                time is used when omitted.
+
+        Returns:
+            The existing or newly created ingestion state.
+
+        Raises:
+            IngestionStoreError: If the timestamp is naive, no authenticated
+                account exists, or the state cannot be loaded after insertion.
+        """
 
         now = datetime.now(timezone.utc)
         initial_time = _as_utc(
@@ -301,7 +426,18 @@ class IngestionStore:
         self,
         completed_at: datetime | None = None,
     ) -> IngestionState:
-        """Advance the cursor after a complete successful scan."""
+        """Advance the cursor after a complete successful scan.
+
+        Args:
+            completed_at: Optional timezone-aware completion timestamp.
+
+        Returns:
+            The ingestion state containing the advanced cursor.
+
+        Raises:
+            IngestionStoreError: If state is absent, the timestamp is naive, or
+                the new cursor precedes the start or previous successful scan.
+        """
 
         completion_time = _as_utc(
             completed_at or datetime.now(timezone.utc)
@@ -377,7 +513,18 @@ class IngestionStore:
     ) -> bool:
         """Register a Gmail message once.
 
-        Return True when inserted and False when already known.
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            gmail_thread_id: External Gmail thread identifier.
+            internal_date_ms: Gmail internal timestamp in epoch milliseconds.
+            discovered_at: Optional timezone-aware discovery timestamp.
+
+        Returns:
+            ``True`` when inserted and ``False`` when already known.
+
+        Raises:
+            IngestionStoreError: If input is invalid, ingestion is not
+                initialized, or SQLite rejects the row.
         """
 
         message_id = _required_identifier(
@@ -455,7 +602,17 @@ class IngestionStore:
         self,
         gmail_message_id: str,
     ) -> StoredGmailMessage | None:
-        """Load one previously registered Gmail message."""
+        """Load one previously registered Gmail message.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+
+        Returns:
+            The stored message, or ``None`` when it is unknown.
+
+        Raises:
+            IngestionStoreError: If the identifier is empty.
+        """
 
         message_id = _required_identifier(
             gmail_message_id,
@@ -495,7 +652,14 @@ class IngestionStore:
         self,
         gmail_message_id: str,
     ) -> bool:
-        """Return whether a Gmail message was already discovered."""
+        """Return whether a Gmail message was already discovered.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+
+        Returns:
+            Whether a matching message row exists.
+        """
 
         return self.load_message(
             gmail_message_id
@@ -510,7 +674,22 @@ class IngestionStore:
         processed_at: datetime | None,
         last_error_code: str | None,
     ) -> StoredGmailMessage:
-        """Persist one internal message processing transition."""
+        """Persist one internal message processing transition.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            status: Database status assigned to the message.
+            changed_at: Timestamp recorded as the latest update.
+            processed_at: Optional successful completion timestamp.
+            last_error_code: Optional safe failure code.
+
+        Returns:
+            The updated stored message.
+
+        Raises:
+            IngestionStoreError: If the identifier is invalid or no registered
+                message can be updated and reloaded.
+        """
 
         message_id = _required_identifier(
             gmail_message_id,
@@ -587,7 +766,15 @@ class IngestionStore:
         *,
         started_at: datetime | None = None,
     ) -> StoredGmailMessage:
-        """Mark a registered message as currently processing."""
+        """Mark a registered message as currently processing.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            started_at: Optional timezone-aware processing timestamp.
+
+        Returns:
+            The updated stored message.
+        """
 
         processing_time = _as_utc(
             started_at
@@ -608,7 +795,15 @@ class IngestionStore:
         *,
         completed_at: datetime | None = None,
     ) -> StoredGmailMessage:
-        """Mark a registered message as successfully processed."""
+        """Mark a registered message as successfully processed.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            completed_at: Optional timezone-aware completion timestamp.
+
+        Returns:
+            The updated stored message.
+        """
 
         completion_time = _as_utc(
             completed_at
@@ -630,7 +825,20 @@ class IngestionStore:
         error_code: str,
         failed_at: datetime | None = None,
     ) -> StoredGmailMessage:
-        """Mark processing as failed without storing sensitive details."""
+        """Mark processing as failed without storing sensitive details.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            error_code: Non-empty safe code of at most 100 characters.
+            failed_at: Optional timezone-aware failure timestamp.
+
+        Returns:
+            The updated stored message.
+
+        Raises:
+            IngestionStoreError: If the error code or timestamp is invalid, or
+                the message is not registered.
+        """
 
         if (
             not isinstance(error_code, str)
@@ -675,7 +883,23 @@ class IngestionStore:
         classifier_version: str,
         classified_at: datetime | None = None,
     ) -> StoredMessageClassification:
-        """Save a classification and update message state atomically."""
+        """Save a classification and update message state atomically.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+            verdict: Supported normalized newsletter outcome.
+            score: Non-negative classifier score.
+            reasons: Ordered non-empty reason codes.
+            classifier_version: Non-empty classifier version identifier.
+            classified_at: Optional timezone-aware classification timestamp.
+
+        Returns:
+            The persisted classification joined with its Gmail identifier.
+
+        Raises:
+            IngestionStoreError: If data is invalid, the message is unknown, or
+                the saved record cannot be loaded.
+        """
 
         message_id = _required_identifier(
             gmail_message_id,
@@ -854,7 +1078,18 @@ class IngestionStore:
         self,
         gmail_message_id: str,
     ) -> StoredMessageClassification | None:
-        """Load the latest classification for one message."""
+        """Load the latest classification for one message.
+
+        Args:
+            gmail_message_id: External Gmail message identifier.
+
+        Returns:
+            The stored classification, or ``None`` when no decision exists.
+
+        Raises:
+            IngestionStoreError: If the identifier or stored reason data is
+                invalid.
+        """
 
         message_id = _required_identifier(
             gmail_message_id,

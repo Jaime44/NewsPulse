@@ -1,3 +1,10 @@
+"""Validate and execute low-level Gmail message and attachment requests.
+
+``MessagesClient`` builds request parameters for the Gmail discovery resource,
+applies input bounds, logs request-failure diagnostics, and exposes raw
+dictionary responses to the higher-level typed :mod:`gmail_client` adapter.
+"""
+
 import sys
 from collections.abc import Sequence
 
@@ -10,17 +17,17 @@ from app.tools.logger import AppLogger
 
 
 class MessagesClientError(Exception):
-    """Custom exception class for MessagesClient errors."""
+    """Raised when a Gmail message or attachment request fails."""
+
     pass
 
 
 class MessagesClient:
-    """
-    MessagesClient provides a wrapper around the Gmail API service to
-    perform operations such as listing, retrieving, sending,
-    and deleting messages.
+    """Wrap Gmail message listing, retrieval, sending, and deletion.
 
-    It depends on an authorized Gmail API service resource.
+    Attributes:
+        service: Authorized Gmail API discovery resource.
+        logger: File logger for request diagnostics.
     """
 
     VALID_MESSAGE_FORMATS = frozenset(
@@ -33,12 +40,10 @@ class MessagesClient:
     )
 
     def __init__(self, service: Resource) -> None:
-        """
-        Initialize the MessagesClient.
+        """Initialize the messages-resource adapter.
 
         Args:
-            service (Resource): Authorized Gmail API service instance.
-            logger (Optional[AppLogger]): Custom logger. Defaults to AppLogger if not provided.
+            service: Authorized Gmail API discovery resource.
         """
         self.service: Resource = service
         self.logger: AppLogger = AppLogger("messages_client.log")
@@ -52,7 +57,22 @@ class MessagesClient:
         label_ids: Sequence[str] | None = None,
         include_spam_trash: bool = False,
     ) -> Dict[str, Any]:
-        """Return one validated page of Gmail message references."""
+        """Return one validated page of Gmail message references.
+
+        Args:
+            user_id: Gmail user identifier.
+            max_results: Page size between 1 and 500.
+            page_token: Optional token selecting a subsequent page.
+            query: Optional Gmail search query.
+            label_ids: Optional labels that every result must match.
+            include_spam_trash: Whether spam and trash may be returned.
+
+        Returns:
+            The raw Gmail ``messages.list`` response.
+
+        Raises:
+            MessagesClientError: If inputs are invalid or the request fails.
+        """
 
         normalized_user_id = user_id.strip()
 
@@ -161,7 +181,20 @@ class MessagesClient:
         message_format: str = "metadata",
         metadata_headers: Sequence[str] | None = None,
     ) -> Dict[str, Any]:
-        """Retrieve one Gmail message in a validated format."""
+        """Retrieve one Gmail message in a validated representation.
+
+        Args:
+            message_id: Gmail message identifier.
+            user_id: Gmail user identifier.
+            message_format: One of Gmail's supported message formats.
+            metadata_headers: Optional headers requested with metadata format.
+
+        Returns:
+            The raw Gmail ``messages.get`` response.
+
+        Raises:
+            MessagesClientError: If inputs are invalid or the request fails.
+        """
 
         if (
             not isinstance(message_id, str)
@@ -273,7 +306,19 @@ class MessagesClient:
         attachment_id: str,
         user_id: str = "me",
     ) -> Dict[str, Any]:
-        """Retrieve one Gmail message attachment."""
+        """Retrieve one Gmail message attachment.
+
+        Args:
+            message_id: Gmail message identifier.
+            attachment_id: Gmail attachment identifier.
+            user_id: Gmail user identifier.
+
+        Returns:
+            The raw Gmail attachment response.
+
+        Raises:
+            MessagesClientError: If identifiers are invalid or the request fails.
+        """
 
         if (
             not isinstance(message_id, str)
@@ -335,15 +380,14 @@ class MessagesClient:
             ) from exc
 
     def send_message(self, message: Dict[str, Any], user_id: str = "me") -> Dict[str, Any]:
-        """
-        Send a message on behalf of the user.
+        """Send a message on behalf of a Gmail user.
 
         Args:
-            message (Dict[str, Any]): The message body to send.
-            user_id (str): The user's email address. Use "me" for the authenticated user.
+            message: Gmail API message body to send.
+            user_id: User identifier; ``"me"`` selects the authenticated user.
 
         Returns:
-            Dict[str, Any]: API response containing the sent message details.
+            The Gmail API response containing sent-message details.
 
         Raises:
             MessagesClientError: If the request fails.
@@ -362,15 +406,14 @@ class MessagesClient:
             raise MessagesClientError("Send message failed") from e
 
     def delete_message(self, message_id: str, user_id: str = "me") -> Dict[str, Any]:
-        """
-        Permanently delete a message.
+        """Permanently delete one Gmail message.
 
         Args:
-            message_id (str): The ID of the message to delete.
-            user_id (str): The user's email address. Use "me" for the authenticated user.
+            message_id: Identifier of the message to delete.
+            user_id: User identifier; ``"me"`` selects the authenticated user.
 
         Returns:
-            Dict[str, Any]: API response from the delete operation.
+            The Gmail API delete response.
 
         Raises:
             MessagesClientError: If the request fails.

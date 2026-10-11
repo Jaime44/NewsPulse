@@ -1,3 +1,10 @@
+"""Own the SQLite connection policy and NewsPulse relational schema.
+
+The :class:`Database` factory enables foreign-key enforcement on every
+connection and creates the single-account OAuth, ingestion, classification,
+newsletter-source, and retained-content tables used by the storage services.
+"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -6,13 +13,30 @@ from pathlib import Path
 
 
 class Database:
-    """Manage connections and schema initialization for NewsPulse."""
+    """Manage SQLite connections and initialize the NewsPulse schema.
+
+    Attributes:
+        path: Filesystem location of the SQLite database.
+    """
 
     def __init__(self, path: Path) -> None:
+        """Store the database path without opening a connection.
+
+        Args:
+            path: Filesystem location of the SQLite database.
+        """
+
         self.path = path
 
     def connect(self) -> sqlite3.Connection:
-        """Open a configured SQLite connection."""
+        """Open a row-addressable SQLite connection with foreign keys enabled.
+
+        Returns:
+            A new connection whose rows support name-based access.
+
+        Raises:
+            sqlite3.Error: If SQLite cannot open or configure the database.
+        """
 
         connection = sqlite3.connect(
             self.path,
@@ -25,7 +49,16 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        """Create the local database and required tables."""
+        """Create the database directory, tables, constraints, and indexes.
+
+        Raises:
+            OSError: If the database parent directory cannot be created.
+            sqlite3.Error: If schema initialization fails.
+
+        Notes:
+            All statements are idempotent and execute within the connection
+            context manager's transaction.
+        """
 
         self.path.parent.mkdir(
             parents=True,

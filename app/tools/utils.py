@@ -1,3 +1,10 @@
+"""Expose filesystem helpers for local logs and secret-key loading.
+
+These utilities support development maintenance outside the main Flask and
+ingestion architecture. Log clearing shells out to the platform ``truncate``
+command, while secret loading performs basic path and content validation.
+"""
+
 import os
 import subprocess
 
@@ -40,14 +47,13 @@ def clear_files_in_directory() -> None:
 
 
 def load_secret_key_from_file(path: str) -> str:
-    """
-    Load the Flask secret key from a file.
+    """Load a non-empty Flask secret key from a UTF-8 file.
 
     Args:
-        path (str): Path to the file containing the secret key.
+        path: Path to the file containing the secret key.
 
     Returns:
-        str: The secret key read from the file.
+        The stripped secret key.
 
     Raises:
         RuntimeError: If the file does not exist, cannot be read,

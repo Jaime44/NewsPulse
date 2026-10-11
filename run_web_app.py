@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""
-Script to run the News Pulse web application.
+"""Run the configured NewsPulse Flask development server.
+
+Importing :mod:`app.backend.web_app` constructs the application and its local
+stores. Executing this module starts Flask with the validated host, port, and
+debug settings.
 """
 
 from app.backend.web_app import app, settings
@@ -16,4 +19,3 @@ if __name__ == "__main__":
         port=settings.port,
         debug=settings.debug,
     )
-

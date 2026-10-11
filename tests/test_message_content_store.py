@@ -1,3 +1,5 @@
+"""Test validation, replacement, loading, and expiry of retained content."""
+
 from __future__ import annotations
 
 import unittest
@@ -31,7 +33,11 @@ EXTRACTED_AT = datetime(
 class MessageContentStoreTests(
     unittest.TestCase
 ):
+    """Verify retained readable-content persistence and expiration."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = (
             TemporaryDirectory()
         )
@@ -57,9 +63,13 @@ class MessageContentStoreTests(
         )
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def insert_account(self) -> None:
+        """Insert the single authenticated account required by the fixture."""
+
         timestamp = (
             EXTRACTED_AT.isoformat()
         )
@@ -89,6 +99,12 @@ class MessageContentStoreTests(
         self,
         gmail_message_id: str,
     ) -> None:
+        """Insert a Gmail message required by the database fixture.
+
+        Args:
+            gmail_message_id: External message identifier stored in the row.
+        """
+
         timestamp = (
             EXTRACTED_AT.isoformat()
         )
@@ -130,6 +146,8 @@ class MessageContentStoreTests(
     def test_retention_days_must_be_positive_integer(
         self,
     ) -> None:
+        """Verify that retention days must be positive integer."""
+
         invalid_values = (
             0,
             -1,
@@ -153,6 +171,8 @@ class MessageContentStoreTests(
     def test_content_is_saved_normalized_and_loaded(
         self,
     ) -> None:
+        """Verify that content is saved normalized and loaded."""
+
         saved_content = (
             self.store.save_content(
                 " gmail-message-1 ",
@@ -227,6 +247,8 @@ class MessageContentStoreTests(
     def test_existing_content_is_replaced(
         self,
     ) -> None:
+        """Verify that existing content is replaced."""
+
         self.store.save_content(
             "gmail-message-1",
             text="Original content",
@@ -297,6 +319,8 @@ class MessageContentStoreTests(
     def test_unregistered_message_is_rejected(
         self,
     ) -> None:
+        """Verify that unregistered message is rejected."""
+
         with self.assertRaises(
             MessageContentStoreError
         ) as raised:
@@ -321,6 +345,8 @@ class MessageContentStoreTests(
     def test_invalid_content_values_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid content values are rejected."""
+
         invalid_cases = (
             (
                 "empty message identifier",
@@ -452,6 +478,8 @@ class MessageContentStoreTests(
     def test_missing_content_returns_none(
         self,
     ) -> None:
+        """Verify that missing content returns none."""
+
         loaded_content = (
             self.store.load_content(
                 "gmail-message-1"
@@ -465,6 +493,8 @@ class MessageContentStoreTests(
     def test_expired_content_is_purged(
         self,
     ) -> None:
+        """Verify that expired content is purged."""
+
         self.insert_message(
             "gmail-message-2"
         )
@@ -540,6 +570,8 @@ class MessageContentStoreTests(
     def test_invalid_stored_links_are_rejected(
         self,
     ) -> None:
+        """Verify that invalid stored links are rejected."""
+
         self.store.save_content(
             "gmail-message-1",
             text="Readable content",

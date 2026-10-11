@@ -1,3 +1,5 @@
+"""Test OAuth credential validity, refresh, revocation, and retry handling."""
+
 from __future__ import annotations
 
 import unittest
@@ -19,7 +21,11 @@ from app.backend.services.oauth_credentials import (
 
 
 class OAuthCredentialRefreshTests(unittest.TestCase):
+    """Verify OAuth refresh outcomes and authorization state changes."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.credentials = Mock(spec=Credentials)
         self.store = Mock(spec=OAuthCredentialStore)
 
@@ -33,6 +39,8 @@ class OAuthCredentialRefreshTests(unittest.TestCase):
         )
 
     def test_returns_credentials_when_they_are_valid(self) -> None:
+        """Verify that valid credentials are returned without refresh."""
+
         self.credentials.valid = True
 
         result = ensure_valid_credentials(
@@ -48,8 +56,14 @@ class OAuthCredentialRefreshTests(unittest.TestCase):
     @patch("app.backend.services.oauth_credentials.Request")
     def test_refreshes_and_persists_expired_credentials(
         self,
-        request_class,
+        request_class: Mock,
     ) -> None:
+        """Verify that expired credentials are refreshed and persisted.
+
+        Args:
+            request_class: Mocked Google authentication request constructor.
+        """
+
         self.credentials.valid = False
         self.credentials.refresh_token = "refresh-token"
 
@@ -70,6 +84,8 @@ class OAuthCredentialRefreshTests(unittest.TestCase):
         self.store.mark_revoked.assert_not_called()
 
     def test_missing_refresh_token_requires_authentication(self) -> None:
+        """Verify that missing refresh token requires authentication."""
+
         self.credentials.valid = False
         self.credentials.refresh_token = None
 
@@ -84,6 +100,8 @@ class OAuthCredentialRefreshTests(unittest.TestCase):
         self.store.save.assert_not_called()
 
     def test_retryable_refresh_error_keeps_authorization(self) -> None:
+        """Verify that retryable refresh error keeps authorization."""
+
         self.credentials.valid = False
         self.credentials.refresh_token = "refresh-token"
         self.credentials.refresh.side_effect = RefreshError(
@@ -101,6 +119,8 @@ class OAuthCredentialRefreshTests(unittest.TestCase):
         self.store.save.assert_not_called()
 
     def test_permanent_refresh_error_revokes_authorization(self) -> None:
+        """Verify that permanent refresh error revokes authorization."""
+
         self.credentials.valid = False
         self.credentials.refresh_token = "refresh-token"
         self.credentials.refresh.side_effect = RefreshError(
@@ -118,6 +138,8 @@ class OAuthCredentialRefreshTests(unittest.TestCase):
         self.store.save.assert_not_called()
 
     def test_transport_error_keeps_authorization(self) -> None:
+        """Verify that transport error keeps authorization."""
+
         self.credentials.valid = False
         self.credentials.refresh_token = "refresh-token"
         self.credentials.refresh.side_effect = TransportError(

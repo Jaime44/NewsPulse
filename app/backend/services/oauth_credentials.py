@@ -1,3 +1,10 @@
+"""Validate, refresh, persist, and revoke stored Google OAuth credentials.
+
+The service distinguishes temporary Google transport failures from permanent
+authorization failures so Flask routes can preserve or clear their session as
+appropriate.
+"""
+
 from __future__ import annotations
 
 from google.auth.exceptions import RefreshError, TransportError
@@ -22,7 +29,21 @@ def ensure_valid_credentials(
     account: StoredOAuthCredentials,
     store: OAuthCredentialStore,
 ) -> Credentials:
-    """Return valid credentials, refreshing and persisting them if needed."""
+    """Return valid credentials, refreshing and persisting them if needed.
+
+    Args:
+        account: Stored account and its decrypted Google credentials.
+        store: Repository used to persist refreshes or mark revocation.
+
+    Returns:
+        Existing valid credentials or successfully refreshed credentials.
+
+    Raises:
+        OAuthReauthenticationRequired: If no refresh token exists or Google
+            permanently rejects the authorization.
+        OAuthRefreshTemporarilyUnavailable: If a retryable or transport error
+            prevents refresh without proving authorization invalid.
+    """
 
     credentials = account.credentials
 

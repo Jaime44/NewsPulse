@@ -1,3 +1,5 @@
+"""Test precedence between stored source rules and heuristic classification."""
+
 from __future__ import annotations
 
 import unittest
@@ -40,6 +42,19 @@ def make_source(
     decision: str = "include",
     origin: str = "manual",
 ) -> NewsletterSource:
+    """Build a newsletter-source record for rule precedence tests.
+
+    Args:
+        source_id: Synthetic storage identifier.
+        source_type: Candidate field matched by the rule.
+        source_value: Normalized value matched by the rule.
+        decision: Include or exclude outcome.
+        origin: Provenance used in priority ordering.
+
+    Returns:
+        The immutable source-rule fixture.
+    """
+
     return NewsletterSource(
         id=source_id,
         account_id=1,
@@ -58,7 +73,11 @@ def make_source(
 class NewsletterClassificationServiceTests(
     unittest.TestCase
 ):
+    """Verify stored-rule matching and precedence over heuristics."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.source_store = Mock(
             spec=NewsletterSourceStore
         )
@@ -87,6 +106,8 @@ class NewsletterClassificationServiceTests(
     def test_heuristic_result_is_used_without_rules(
         self,
     ) -> None:
+        """Verify that heuristic result is used without rules."""
+
         result = self.service.classify(
             self.metadata
         )
@@ -107,6 +128,8 @@ class NewsletterClassificationServiceTests(
     def test_manual_exclusion_wins_over_inclusion(
         self,
     ) -> None:
+        """Verify that manual exclusion wins over inclusion."""
+
         included_sender = make_source(
             1,
             "sender",
@@ -166,6 +189,8 @@ class NewsletterClassificationServiceTests(
     def test_manual_inclusion_wins_over_confirmed_exclusion(
         self,
     ) -> None:
+        """Verify that manual inclusion wins over confirmed exclusion."""
+
         confirmed_exclusion = make_source(
             1,
             "domain",
@@ -217,6 +242,8 @@ class NewsletterClassificationServiceTests(
     def test_confirmed_list_id_is_normalized(
         self,
     ) -> None:
+        """Verify that confirmed list ID is normalized."""
+
         confirmed_source = make_source(
             1,
             "list_id",
@@ -265,6 +292,8 @@ class NewsletterClassificationServiceTests(
     def test_gmail_label_matching_is_case_sensitive(
         self,
     ) -> None:
+        """Verify that Gmail label matching is case sensitive."""
+
         label_source = make_source(
             1,
             "gmail_label",
@@ -322,6 +351,8 @@ class NewsletterClassificationServiceTests(
     def test_automatic_rule_does_not_override_heuristics(
         self,
     ) -> None:
+        """Verify that automatic rule does not override heuristics."""
+
         automatic_exclusion = make_source(
             1,
             "sender",

@@ -1,3 +1,13 @@
+"""Create the NewsPulse Flask application and expose its HTTP endpoints.
+
+This module is the application's composition and delivery layer. At import
+time it loads configuration, initializes SQLite-backed OAuth and newsletter
+stores, configures secure session-cookie options, and registers routes for
+Google OAuth, the dashboard, Gmail access, source management, manual ingestion,
+and logout. OAuth credentials remain in encrypted server-side storage while the
+browser session carries only transient state or the single account identifier.
+"""
+
 import hmac
 import os
 
@@ -12,8 +22,9 @@ from flask import (
     session,
     url_for,
 )
+from flask.typing import ResponseReturnValue
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
+from googleapiclient.discovery import Resource, build
 
 from app.backend.bd.db import Database
 from app.backend.bd.oauth_store import (
@@ -110,7 +121,15 @@ app.secret_key = read_secret_file(
 
 def get_authenticated_account(
 ) -> StoredOAuthCredentials | None:
-    """Load the authenticated account from server-side storage."""
+    """Load the session account from encrypted server-side storage.
+
+    Returns:
+        The active single-account authorization, or ``None`` when the session
+        is absent, invalid, missing from storage, or revoked.
+
+    Notes:
+        Invalid, missing, and revoked account states clear the browser session.
+    """
 
     account_id = session.get("account_id")
 
@@ -132,8 +151,18 @@ def get_authenticated_account(
 
     return stored_account
 
-def get_authenticated_gmail_service():
-    """Build Gmail using valid server-side credentials."""
+def get_authenticated_gmail_service() -> Resource | None:
+    """Build a Gmail resource from valid server-side credentials.
+
+    Returns:
+        An authorized Gmail discovery resource, or ``None`` when no account is
+        authenticated.
+
+    Raises:
+        OAuthReauthenticationRequired: If authorization is permanently invalid.
+        OAuthRefreshTemporarilyUnavailable: If credentials cannot be refreshed
+            because of a temporary Google or transport failure.
+    """
 
     stored_account = get_authenticated_account()
 
@@ -154,7 +183,14 @@ def get_authenticated_gmail_service():
 def has_valid_action_header(
     expected_value: str,
 ) -> bool:
-    """Validate one intentional browser action."""
+    """Compare the request action header to an expected value in constant time.
+
+    Args:
+        expected_value: Exact action token required by the endpoint.
+
+    Returns:
+        Whether the request contains the expected action token.
+    """
 
     action_header = request.headers.get(
         INGESTION_ACTION_HEADER,
@@ -169,7 +205,14 @@ def has_valid_action_header(
 def serialize_newsletter_source(
     source: NewsletterSource,
 ) -> dict[str, object]:
-    """Return the public API representation of one source."""
+    """Return the public API representation of one source rule.
+
+    Args:
+        source: Stored newsletter source to expose.
+
+    Returns:
+        A JSON-compatible dictionary without internal row or account IDs.
+    """
 
     return {
         "source_type": source.source_type,
@@ -193,13 +236,21 @@ def serialize_newsletter_source(
     }
 
 @app.route('/')
-def index():
-    """Serve the main page with Google Sign-In button."""
+def index() -> str:
+    """Render the public landing page with its Google sign-in control.
+
+    Returns:
+        Rendered landing-page HTML.
+    """
     return render_template('index.html')
 
 @app.route('/auth/google')
-def google_auth():
-    """Initiate Google OAuth flow."""
+def google_auth() -> ResponseReturnValue:
+    """Initiate Google OAuth and retain its CSRF state in the session.
+
+    Returns:
+        A redirect to Google's authorization page, or a sanitized JSON error.
+    """
     
     try:
         # Create OAuth flow
@@ -231,8 +282,17 @@ def google_auth():
         ), 500
 
 @app.route('/auth/google/callback')
-def google_callback():
-    """Handle Google OAuth callback."""
+def google_callback() -> ResponseReturnValue:
+    """Validate and complete the Google OAuth callback.
+
+    Returns:
+        A dashboard or landing-page redirect on handled outcomes, or a
+        sanitized JSON error for invalid or failed callbacks.
+
+    Notes:
+        Successful credentials are encrypted in SQLite before the session is
+        replaced with the single server-side account identifier.
+    """
     
     try:
         # Get authorization code from callback
@@ -340,8 +400,12 @@ def google_callback():
         ), 500
 
 @app.route('/dashboard')
-def dashboard():
-    """Display the dashboard for the connected account."""
+def dashboard() -> ResponseReturnValue:
+    """Render the dashboard for the connected account.
+
+    Returns:
+        Dashboard HTML, a landing-page redirect, or a sanitized storage error.
+    """
 
     try:
         stored_account = get_authenticated_account()
@@ -364,8 +428,12 @@ def dashboard():
     )
 
 @app.route("/api/gmail/profile")
-def get_gmail_profile():
-    """Get the Gmail profile using valid server-side credentials."""
+def get_gmail_profile() -> ResponseReturnValue:
+    """Return the authenticated Gmail profile as JSON.
+
+    Returns:
+        The profile response or a sanitized authentication/service error.
+    """
 
     try:
         gmail_service = get_authenticated_gmail_service()
@@ -417,8 +485,12 @@ def get_gmail_profile():
         ), 500
 
 @app.route("/api/gmail/messages")
-def get_gmail_messages():
-    """List Gmail messages using valid server-side credentials."""
+def get_gmail_messages() -> ResponseReturnValue:
+    """Return up to ten Gmail message references as JSON.
+
+    Returns:
+        A message collection or a sanitized authentication/service error.
+    """
 
     try:
         gmail_service = get_authenticated_gmail_service()
@@ -480,8 +552,12 @@ def get_gmail_messages():
         ), 500
 
 @app.get("/api/newsletter-sources")
-def get_newsletter_sources():
-    """List active newsletter source rules."""
+def get_newsletter_sources() -> ResponseReturnValue:
+    """List active newsletter source rules for the authenticated account.
+
+    Returns:
+        A no-store JSON source collection or a sanitized error response.
+    """
 
     try:
         stored_account = (
@@ -541,8 +617,12 @@ def get_newsletter_sources():
         ), 500
 
 @app.post("/api/newsletter-sources")
-def save_newsletter_source():
-    """Create or update one manual newsletter source rule."""
+def save_newsletter_source() -> ResponseReturnValue:
+    """Validate and create or update one manual newsletter source rule.
+
+    Returns:
+        A no-store JSON representation of the saved rule or a sanitized error.
+    """
 
     try:
         stored_account = (
@@ -632,8 +712,12 @@ def save_newsletter_source():
         ), 500
 
 @app.post("/api/newsletter-sources/deactivate")
-def deactivate_newsletter_source():
-    """Deactivate one newsletter source without deleting it."""
+def deactivate_newsletter_source() -> ResponseReturnValue:
+    """Validate and deactivate one newsletter source without deleting it.
+
+    Returns:
+        A JSON success status or a sanitized validation, lookup, or store error.
+    """
 
     try:
         stored_account = (
@@ -726,8 +810,17 @@ def deactivate_newsletter_source():
         ), 500
 
 @app.post("/api/ingestion/scan")
-def run_gmail_ingestion():
-    """Run one authenticated incremental Gmail scan."""
+def run_gmail_ingestion() -> ResponseReturnValue:
+    """Run one non-concurrent authenticated incremental Gmail scan.
+
+    Returns:
+        A safe scan summary or a sanitized validation, authentication,
+        concurrency, or service error.
+
+    Notes:
+        A process-local non-blocking lock prevents overlapping manual scans and
+        is released in the ``finally`` block for every acquired execution.
+    """
 
     scan_lock_acquired = False
 
@@ -890,8 +983,12 @@ def run_gmail_ingestion():
             ingestion_scan_lock.release()
 
 @app.post("/logout")
-def logout():
-    """Clear the browser session."""
+def logout() -> ResponseReturnValue:
+    """Clear the browser session and redirect to the landing page.
+
+    Returns:
+        A redirect to the public landing page.
+    """
 
     session.clear()
 

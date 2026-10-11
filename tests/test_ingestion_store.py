@@ -1,3 +1,5 @@
+"""Test durable ingestion cursors, messages, classifications, and transitions."""
+
 from __future__ import annotations
 
 import unittest
@@ -24,7 +26,11 @@ STARTED_AT = datetime(
 
 
 class IngestionStoreTests(unittest.TestCase):
+    """Verify durable ingestion state and message lifecycles."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = TemporaryDirectory()
         database_path = (
             Path(self.temporary_directory.name)
@@ -35,9 +41,13 @@ class IngestionStoreTests(unittest.TestCase):
         self.store = IngestionStore(self.database)
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def insert_account(self) -> None:
+        """Insert the single authenticated account required by the fixture."""
+
         timestamp = STARTED_AT.isoformat()
 
         with self.database.connect() as connection:
@@ -64,6 +74,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_state_requires_authenticated_account(
         self,
     ) -> None:
+        """Verify that state requires authenticated account."""
+
         with self.assertRaises(IngestionStoreError):
             self.store.get_or_create_state(
                 started_at=STARTED_AT
@@ -72,6 +84,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_initial_timestamp_is_created_only_once(
         self,
     ) -> None:
+        """Verify that initial timestamp is created only once."""
+
         self.insert_account()
 
         first_state = self.store.get_or_create_state(
@@ -103,6 +117,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_timestamp_is_normalized_to_utc(
         self,
     ) -> None:
+        """Verify that timestamp is normalized to UTC."""
+
         self.insert_account()
 
         madrid_offset = timezone(
@@ -133,6 +149,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_successful_scan_advances_cursor(
         self,
     ) -> None:
+        """Verify that successful scan advances cursor."""
+
         self.insert_account()
         self.store.get_or_create_state(
             started_at=STARTED_AT
@@ -163,6 +181,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_cursor_cannot_move_backwards(
         self,
     ) -> None:
+        """Verify that cursor cannot move backwards."""
+
         self.insert_account()
         self.store.get_or_create_state(
             started_at=STARTED_AT
@@ -196,6 +216,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_naive_timestamp_is_rejected(
         self,
     ) -> None:
+        """Verify that naive timestamp is rejected."""
+
         self.insert_account()
 
         naive_timestamp = datetime(
@@ -212,6 +234,8 @@ class IngestionStoreTests(unittest.TestCase):
             )
 
     def prepare_ingestion(self) -> None:
+        """Create the authenticated account and initialize ingestion state."""
+
         self.insert_account()
         self.store.get_or_create_state(
             started_at=STARTED_AT
@@ -220,6 +244,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_message_requires_initialized_ingestion(
         self,
     ) -> None:
+        """Verify that message requires initialized ingestion."""
+
         self.insert_account()
 
         with self.assertRaises(IngestionStoreError):
@@ -233,6 +259,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_message_is_registered_and_loaded(
         self,
     ) -> None:
+        """Verify that message is registered and loaded."""
+
         self.prepare_ingestion()
 
         discovered_at = (
@@ -286,6 +314,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_duplicate_message_is_idempotent(
         self,
     ) -> None:
+        """Verify that duplicate message is idempotent."""
+
         self.prepare_ingestion()
 
         first_insert = self.store.register_message(
@@ -325,6 +355,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_message_identifiers_are_required(
         self,
     ) -> None:
+        """Verify that message identifiers are required."""
+
         self.prepare_ingestion()
 
         with self.assertRaises(IngestionStoreError):
@@ -344,6 +376,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_internal_date_must_be_valid(
         self,
     ) -> None:
+        """Verify that internal date must be valid."""
+
         self.prepare_ingestion()
 
         invalid_values = (
@@ -368,6 +402,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_message_timestamp_requires_timezone(
         self,
     ) -> None:
+        """Verify that message timestamp requires timezone."""
+
         self.prepare_ingestion()
 
         naive_timestamp = datetime(
@@ -389,6 +425,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_unknown_message_is_not_known(
         self,
     ) -> None:
+        """Verify that unknown message is not known."""
+
         self.prepare_ingestion()
 
         self.assertFalse(
@@ -405,6 +443,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_newsletter_classification_is_saved_and_loaded(
         self,
     ) -> None:
+        """Verify that newsletter classification is saved and loaded."""
+
         self.prepare_ingestion()
 
         self.store.register_message(
@@ -489,6 +529,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_not_newsletter_marks_message_skipped(
         self,
     ) -> None:
+        """Verify that a non-newsletter verdict marks the message skipped."""
+
         self.prepare_ingestion()
 
         self.store.register_message(
@@ -534,6 +576,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_classification_can_be_replaced(
         self,
     ) -> None:
+        """Verify that classification can be replaced."""
+
         self.prepare_ingestion()
 
         self.store.register_message(
@@ -613,6 +657,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_classification_requires_registered_message(
         self,
     ) -> None:
+        """Verify that classification requires registered message."""
+
         self.prepare_ingestion()
 
         with self.assertRaises(
@@ -630,6 +676,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_invalid_classification_data_is_rejected(
         self,
     ) -> None:
+        """Verify that invalid classification data is rejected."""
+
         self.prepare_ingestion()
 
         self.store.register_message(
@@ -690,6 +738,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_message_processing_lifecycle_can_be_retried(
         self,
     ) -> None:
+        """Verify that message processing lifecycle can be retried."""
+
         self.prepare_ingestion()
 
         self.store.register_message(
@@ -820,6 +870,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_processing_status_requires_registered_message(
         self,
     ) -> None:
+        """Verify that processing status requires registered message."""
+
         self.prepare_ingestion()
 
         with self.assertRaises(
@@ -852,6 +904,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_failed_status_requires_safe_error_code(
         self,
     ) -> None:
+        """Verify that failed status requires safe error code."""
+
         self.prepare_ingestion()
 
         self.store.register_message(
@@ -900,6 +954,8 @@ class IngestionStoreTests(unittest.TestCase):
     def test_processing_timestamps_require_timezone(
         self,
     ) -> None:
+        """Verify that processing timestamps require timezone."""
+
         self.prepare_ingestion()
 
         self.store.register_message(

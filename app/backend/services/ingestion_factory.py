@@ -1,3 +1,10 @@
+"""Assemble the complete Gmail ingestion service dependency graph.
+
+The factory wires one authorized Gmail resource and the configured SQLite
+database into repositories, classification services, MIME decoding, parsing,
+retention, and the top-level incremental scan coordinator.
+"""
+
 from __future__ import annotations
 
 from googleapiclient.discovery import Resource
@@ -38,7 +45,19 @@ def build_gmail_ingestion_service(
     database: Database,
     retention_days: int,
 ) -> GmailIngestionService:
-    """Build the complete incremental ingestion service."""
+    """Build the complete incremental ingestion service.
+
+    Args:
+        gmail_service: Authorized Gmail API discovery resource.
+        database: Configured SQLite database shared by all repositories.
+        retention_days: Positive lifetime for persisted readable content.
+
+    Returns:
+        A fully wired incremental Gmail ingestion service.
+
+    Raises:
+        ValueError: If the content retention period is invalid.
+    """
 
     ingestion_store = IngestionStore(
         database

@@ -1,3 +1,5 @@
+"""Test orchestration and error mapping in message-content processing."""
+
 from __future__ import annotations
 
 import unittest
@@ -51,7 +53,11 @@ EXPIRES_AT = datetime(
 class MessageContentProcessingServiceTests(
     unittest.TestCase
 ):
+    """Verify processing orchestration and stable error boundaries."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.content_service = Mock(
             spec=GmailMessageContentService
         )
@@ -108,6 +114,8 @@ class MessageContentProcessingServiceTests(
     def test_message_is_decoded_parsed_and_stored(
         self,
     ) -> None:
+        """Verify that message is decoded parsed and stored."""
+
         (
             self.content_service
             .extract_text_parts
@@ -163,6 +171,8 @@ class MessageContentProcessingServiceTests(
     def test_decoding_error_stops_processing(
         self,
     ) -> None:
+        """Verify that decoding error stops processing."""
+
         decoding_error = MessageContentError(
             "Unable to decode message"
         )
@@ -199,6 +209,8 @@ class MessageContentProcessingServiceTests(
     def test_parsing_error_stops_before_storage(
         self,
     ) -> None:
+        """Verify that parsing error stops before storage."""
+
         (
             self.content_service
             .extract_text_parts
@@ -240,6 +252,8 @@ class MessageContentProcessingServiceTests(
     def test_storage_error_is_exposed_as_processing_error(
         self,
     ) -> None:
+        """Verify that storage error is exposed as processing error."""
+
         (
             self.content_service
             .extract_text_parts
@@ -294,6 +308,8 @@ class MessageContentProcessingServiceTests(
     def test_expired_content_is_purged(
         self,
     ) -> None:
+        """Verify that expired content is purged."""
+
         self.store.purge_expired.return_value = 3
 
         deleted_count = (
@@ -326,6 +342,8 @@ class MessageContentProcessingServiceTests(
     def test_purge_error_is_exposed_as_processing_error(
         self,
     ) -> None:
+        """Verify that purge error is exposed as processing error."""
+
         storage_error = (
             MessageContentStoreError(
                 "Sensitive database detail"

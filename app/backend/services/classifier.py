@@ -1,3 +1,10 @@
+"""Classify Gmail metadata with deterministic, explainable newsletter signals.
+
+The classifier scores configured labels and senders together with standard
+mailing-list headers, then returns an immutable verdict consumed by the stored
+rule resolver and ingestion pipeline.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -15,6 +22,8 @@ class NewsletterClassifierError(ValueError):
 
 
 class NewsletterVerdict(str, Enum):
+    """Enumerate the three outcomes produced by newsletter classification."""
+
     NEWSLETTER = "newsletter"
     REVIEW = "review"
     NOT_NEWSLETTER = "not_newsletter"
@@ -22,12 +31,20 @@ class NewsletterVerdict(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class NewsletterClassification:
+    """Describe a classifier verdict, its score, and contributing reason codes."""
+
     verdict: NewsletterVerdict
     score: int
     reasons: tuple[str, ...]
 
     @property
     def is_newsletter(self) -> bool:
+        """Return whether the verdict conclusively identifies a newsletter.
+
+        Returns:
+            ``True`` only for ``NewsletterVerdict.NEWSLETTER``.
+        """
+
         return (
             self.verdict
             is NewsletterVerdict.NEWSLETTER
@@ -35,6 +52,12 @@ class NewsletterClassification:
 
     @property
     def requires_review(self) -> bool:
+        """Return whether the verdict requires a manual decision.
+
+        Returns:
+            ``True`` only for ``NewsletterVerdict.REVIEW``.
+        """
+
         return (
             self.verdict
             is NewsletterVerdict.REVIEW
@@ -47,6 +70,20 @@ def _normalize_config_values(
     *,
     case_sensitive: bool,
 ) -> frozenset[str]:
+    """Validate and normalize configured classifier values.
+
+    Args:
+        values: Label or sender values supplied at construction time.
+        field_name: Configuration field used in validation errors.
+        case_sensitive: Whether normalized values preserve case.
+
+    Returns:
+        A deduplicated immutable set of stripped values.
+
+    Raises:
+        NewsletterClassifierError: If the collection contains invalid values.
+    """
+
     if isinstance(values, (str, bytes)):
         raise NewsletterClassifierError(
             f"{field_name} must be a sequence"
@@ -79,7 +116,13 @@ def _normalize_config_values(
 
 
 class NewsletterClassifier:
-    """Classify Gmail metadata using explainable signals."""
+    """Classify Gmail metadata using weighted and explainable signals.
+
+    Attributes:
+        newsletter_label_ids: Case-sensitive Gmail labels treated as strong
+            newsletter evidence.
+        known_senders: Case-folded sender addresses treated as strong evidence.
+    """
 
     NEWSLETTER_SCORE = 5
     REVIEW_SCORE = 2
@@ -89,6 +132,16 @@ class NewsletterClassifier:
         newsletter_label_ids: Sequence[str] = (),
         known_senders: Sequence[str] = (),
     ) -> None:
+        """Configure strong label and sender signals.
+
+        Args:
+            newsletter_label_ids: Gmail label IDs that identify newsletters.
+            known_senders: Sender addresses that identify newsletters.
+
+        Raises:
+            NewsletterClassifierError: If either sequence contains invalid data.
+        """
+
         self.newsletter_label_ids = (
             _normalize_config_values(
                 newsletter_label_ids,
@@ -109,6 +162,18 @@ class NewsletterClassifier:
         self,
         metadata: GmailMessageMetadata,
     ) -> NewsletterClassification:
+        """Score one Gmail metadata record and return its newsletter verdict.
+
+        Args:
+            metadata: Validated headers, labels, and identifiers from Gmail.
+
+        Returns:
+            The verdict, aggregate score, and ordered contributing reasons.
+
+        Raises:
+            NewsletterClassifierError: If ``metadata`` has the wrong type.
+        """
+
         if not isinstance(
             metadata,
             GmailMessageMetadata,

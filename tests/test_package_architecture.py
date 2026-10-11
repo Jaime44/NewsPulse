@@ -1,3 +1,5 @@
+"""Test package imports and guard against legacy desktop OAuth integration."""
+
 from __future__ import annotations
 
 import importlib
@@ -25,6 +27,8 @@ LEGACY_MARKERS = (
 
 
 class PackageArchitectureTests(unittest.TestCase):
+    """Verify package-boundary and OAuth architecture invariants."""
+
     def test_gmail_modules_import_from_project_root(self) -> None:
         """Gmail modules must use the real app package."""
 

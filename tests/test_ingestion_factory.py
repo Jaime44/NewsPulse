@@ -1,3 +1,5 @@
+"""Test construction of the complete Gmail ingestion dependency graph."""
+
 from __future__ import annotations
 
 import unittest
@@ -41,7 +43,11 @@ from app.tools.gmail.gmail_client import GmailClient
 
 
 class IngestionFactoryTests(unittest.TestCase):
+    """Verify dependency construction for Gmail ingestion."""
+
     def setUp(self) -> None:
+        """Create isolated dependencies and fixtures for each test."""
+
         self.temporary_directory = (
             TemporaryDirectory()
         )
@@ -59,11 +65,15 @@ class IngestionFactoryTests(unittest.TestCase):
         self.gmail_service = Mock()
 
     def tearDown(self) -> None:
+        """Release temporary resources created for each test."""
+
         self.temporary_directory.cleanup()
 
     def test_builds_complete_ingestion_service(
         self,
     ) -> None:
+        """Verify that the factory builds the complete ingestion graph."""
+
         service = build_gmail_ingestion_service(
             gmail_service=self.gmail_service,
             database=self.database,
