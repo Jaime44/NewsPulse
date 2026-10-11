@@ -7,11 +7,16 @@ domain records consumed by classification and content-processing services.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, Dict
 from googleapiclient.discovery import Resource
 
 
-from app.tools.logger import AppLogger
+from app.tools.logger import (
+    AppLogger,
+    is_error_logged,
+    mark_error_logged,
+)
 from app.tools.gmail.messages_client import (
     MessagesClient as GmailMessagesClient,
     MessagesClientError,
@@ -21,8 +26,6 @@ from app.tools.gmail.user_client import UsersClient as GmailUsersClient
 
 class GmailClientError(Exception):
     """Raised when a high-level Gmail operation or response validation fails."""
-
-    pass
 
 
 class GmailListingLimitReached(GmailClientError):
@@ -323,9 +326,16 @@ class GmailClient:
         """
         try:
             return self.users.get_profile(user_id=user_id)
-        except GmailClientError as e:
-            self.logger.error(f"Failed to get profile for user '{user_id}': {e}")
-            raise GmailClientError("Get profile failed") from e
+        except GmailClientError as exc:
+            self.logger.error(
+                "Gmail profile retrieval failed: %s",
+                type(exc).__name__,
+            )
+            raise mark_error_logged(
+                GmailClientError(
+                    "Get profile failed"
+                )
+            ) from exc
           
     def list_message_references(
         self,
@@ -386,9 +396,19 @@ class GmailClient:
         references: list[GmailMessageReference] = []
         page_token: str | None = None
         seen_page_tokens: set[str] = set()
+        page_number = 0
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail message pagination started: total_limit=%d "
+            "page_size=%d require_complete=%s",
+            total_limit,
+            page_size,
+            require_complete,
+        )
 
         try:
             while len(references) < total_limit:
+                page_number += 1
                 remaining = total_limit - len(references)
                 current_page_size = min(
                     page_size,
@@ -473,6 +493,16 @@ class GmailClient:
                         next_page_token.strip()
                     )
 
+                self.logger.debug(
+                    "Gmail message page processed: page_number=%d "
+                    "page_item_count=%d accumulated_count=%d "
+                    "has_next_page=%s",
+                    page_number,
+                    len(page_messages),
+                    len(references),
+                    normalized_page_token is not None,
+                )
+
                 if len(references) >= total_limit:
                     if (
                         require_complete
@@ -508,13 +538,28 @@ class GmailClient:
                 page_token = normalized_page_token
 
         except MessagesClientError as exc:
-            self.logger.error(
-                "Gmail message pagination failed"
-            )
-            raise GmailClientError(
-                "Failed to list Gmail messages"
+            if is_error_logged(exc):
+                self.logger.debug(
+                    "Gmail message pagination received an already logged "
+                    "client failure"
+                )
+            else:
+                self.logger.error(
+                    "Gmail message pagination failed"
+                )
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to list Gmail messages"
+                )
             ) from exc
 
+        self.logger.debug(
+            "Gmail message pagination completed: page_count=%d "
+            "reference_count=%d duration_ms=%.2f",
+            page_number,
+            len(references),
+            (perf_counter() - operation_started_at) * 1_000,
+        )
         return references
 
     def get_message_metadata(
@@ -545,19 +590,29 @@ class GmailClient:
                 ),
             )
         except MessagesClientError as exc:
-            self.logger.error(
-                "Gmail message metadata retrieval failed"
-            )
-            raise GmailClientError(
-                "Failed to retrieve Gmail message metadata"
+            if is_error_logged(exc):
+                self.logger.debug(
+                    "Gmail metadata retrieval received an already logged "
+                    "client failure"
+                )
+            else:
+                self.logger.error(
+                    "Gmail message metadata retrieval failed"
+                )
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to retrieve Gmail message metadata"
+                )
             ) from exc
         except Exception as exc:
             self.logger.error(
                 "Gmail message metadata retrieval failed: "
                 f"{type(exc).__name__}"
             )
-            raise GmailClientError(
-                "Failed to retrieve Gmail message metadata"
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to retrieve Gmail message metadata"
+                )
             ) from exc
 
         if not isinstance(response, dict):
@@ -729,19 +784,29 @@ class GmailClient:
                 message_format="full",
             )
         except MessagesClientError as exc:
-            self.logger.error(
-                "Gmail full message retrieval failed"
-            )
-            raise GmailClientError(
-                "Failed to retrieve Gmail full message"
+            if is_error_logged(exc):
+                self.logger.debug(
+                    "Gmail full-message retrieval received an already logged "
+                    "client failure"
+                )
+            else:
+                self.logger.error(
+                    "Gmail full message retrieval failed"
+                )
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to retrieve Gmail full message"
+                )
             ) from exc
         except Exception as exc:
             self.logger.error(
                 "Gmail full message retrieval failed: "
                 f"{type(exc).__name__}"
             )
-            raise GmailClientError(
-                "Failed to retrieve Gmail full message"
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to retrieve Gmail full message"
+                )
             ) from exc
 
         if not isinstance(response, dict):
@@ -854,19 +919,29 @@ class GmailClient:
                 user_id=normalized_user_id,
             )
         except MessagesClientError as exc:
-            self.logger.error(
-                "Gmail attachment retrieval failed"
-            )
-            raise GmailClientError(
-                "Failed to retrieve Gmail attachment"
+            if is_error_logged(exc):
+                self.logger.debug(
+                    "Gmail attachment retrieval received an already logged "
+                    "client failure"
+                )
+            else:
+                self.logger.error(
+                    "Gmail attachment retrieval failed"
+                )
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to retrieve Gmail attachment"
+                )
             ) from exc
         except Exception as exc:
             self.logger.error(
                 "Gmail attachment retrieval failed: "
                 f"{type(exc).__name__}"
             )
-            raise GmailClientError(
-                "Failed to retrieve Gmail attachment"
+            raise mark_error_logged(
+                GmailClientError(
+                    "Failed to retrieve Gmail attachment"
+                )
             ) from exc
 
         if not isinstance(response, dict):

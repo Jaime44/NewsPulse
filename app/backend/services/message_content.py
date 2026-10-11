@@ -14,11 +14,17 @@ import codecs
 from collections.abc import Iterator
 from dataclasses import dataclass
 from email.message import Message
+from time import perf_counter
 
 from app.tools.gmail.gmail_client import (
     GmailClient,
     GmailClientError,
     GmailMimePart,
+)
+from app.tools.logger import (
+    AppLogger,
+    is_error_logged,
+    mark_error_logged,
 )
 
 
@@ -239,6 +245,9 @@ class GmailMessageContentService:
         self.max_total_bytes = (
             max_total_bytes
         )
+        self.logger = AppLogger(
+            "content_processing.log"
+        )
 
     def _load_encoded_data(
         self,
@@ -308,6 +317,12 @@ class GmailMessageContentService:
             MessageContentError: If Gmail retrieval, body encoding, charset, or
                 configured byte limits prevent safe extraction.
         """
+
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail MIME text extraction started: message_id=%s",
+            message_id,
+        )
 
         try:
             message = (
@@ -407,10 +422,26 @@ class GmailMessageContentService:
                     )
                 )
 
-            return tuple(decoded_parts)
+            result = tuple(decoded_parts)
+            self.logger.debug(
+                "Gmail MIME text extraction completed: message_id=%s "
+                "part_count=%d decoded_bytes=%d duration_ms=%.2f",
+                message_id,
+                len(result),
+                total_decoded_bytes,
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return result
 
         except GmailClientError as exc:
-            raise MessageContentError(
+            processing_error = MessageContentError(
                 "Failed to retrieve "
                 "Gmail message content"
-            ) from exc
+            )
+
+            if is_error_logged(exc):
+                mark_error_logged(
+                    processing_error
+                )
+
+            raise processing_error from exc

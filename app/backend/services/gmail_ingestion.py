@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import perf_counter
 
 from app.backend.bd.ingestion_store import (
     IngestionStore,
@@ -31,7 +32,11 @@ from app.tools.gmail.gmail_client import (
     GmailClientError,
     GmailListingLimitReached,
 )
-from app.tools.logger import AppLogger
+from app.tools.logger import (
+    AppLogger,
+    is_error_logged,
+    mark_error_logged,
+)
 
 
 class GmailIngestionError(RuntimeError):
@@ -187,6 +192,12 @@ class GmailIngestionService:
                 message has been marked with a safe failure code.
         """
 
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Newsletter content processing started: message_id=%s",
+            gmail_message_id,
+        )
+
         self.store.mark_message_processing(
             gmail_message_id,
             started_at=processing_at,
@@ -215,6 +226,12 @@ class GmailIngestionService:
             gmail_message_id,
             completed_at=processing_at,
         )
+        self.logger.debug(
+            "Newsletter content processing completed: message_id=%s "
+            "duration_ms=%.2f",
+            gmail_message_id,
+            (perf_counter() - operation_started_at) * 1_000,
+        )
 
     def scan(
         self,
@@ -241,16 +258,33 @@ class GmailIngestionService:
                 cursor is not advanced on failure.
         """
 
+        operation_started_at = perf_counter()
         scan_started_at = _as_utc(
             self.clock()
         )
+        label_count = (
+            len(label_ids)
+            if label_ids is not None
+            else 0
+        )
+        self.logger.info(
+            "Gmail ingestion scan started: total_limit=%d page_size=%d "
+            "label_count=%d",
+            total_limit,
+            page_size,
+            label_count,
+        )
 
         try:
-            (
+            purged_count = (
                 self.content_processing_service
                 .purge_expired(
                     expired_at=scan_started_at
                 )
+            )
+            self.logger.debug(
+                "Expired content purge completed: deleted_count=%d",
+                purged_count,
             )
 
             state = self.store.get_or_create_state(
@@ -265,6 +299,11 @@ class GmailIngestionService:
             gmail_query = self._build_after_query(
                 cursor_before
             )
+            self.logger.debug(
+                "Ingestion cursor loaded: cursor_before=%s query=%s",
+                cursor_before.isoformat(),
+                gmail_query,
+            )
 
             references = (
                 self.gmail_client
@@ -277,6 +316,10 @@ class GmailIngestionService:
                     include_spam_trash=False,
                     require_complete=True,
                 )
+            )
+            self.logger.info(
+                "Gmail message discovery completed: listed_count=%d",
+                len(references),
             )
 
             application_start_ms = int(
@@ -300,6 +343,12 @@ class GmailIngestionService:
 
                 if stored_classification is not None:
                     already_known_count += 1
+                    self.logger.debug(
+                        "Reusing stored classification: message_id=%s "
+                        "verdict=%s",
+                        reference.message_id,
+                        stored_classification.verdict,
+                    )
 
                     if (
                         stored_classification.verdict
@@ -396,6 +445,14 @@ class GmailIngestionService:
                     self.classification_service
                     .classify(metadata)
                 )
+                self.logger.debug(
+                    "Message classification completed: message_id=%s "
+                    "verdict=%s score=%d reason_count=%d",
+                    metadata.message_id,
+                    classification.verdict.value,
+                    classification.score,
+                    len(classification.reasons),
+                )
 
                 self.store.save_message_classification(
                     metadata.message_id,
@@ -434,8 +491,12 @@ class GmailIngestionService:
             self.store.mark_scan_successful(
                 completed_at=scan_started_at
             )
+            self.logger.debug(
+                "Ingestion cursor advanced: cursor_after=%s",
+                scan_started_at.isoformat(),
+            )
 
-            return IngestionScanResult(
+            result = IngestionScanResult(
                 scan_started_at=scan_started_at,
                 cursor_before=cursor_before,
                 cursor_after=scan_started_at,
@@ -454,37 +515,80 @@ class GmailIngestionService:
                     not_newsletter_count
                 ),
             )
-        except GmailIngestionError:
+            self.logger.info(
+                "Gmail ingestion scan completed: listed=%d discovered=%d "
+                "already_known=%d ignored_before_start=%d newsletter=%d "
+                "review=%d not_newsletter=%d duration_ms=%.2f",
+                result.listed_count,
+                result.discovered_count,
+                result.already_known_count,
+                result.ignored_before_start_count,
+                result.newsletter_count,
+                result.review_count,
+                result.not_newsletter_count,
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return result
+        except GmailIngestionError as exc:
+            self.logger.debug(
+                "Gmail ingestion scan aborted: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
             self.logger.error(
                 "Gmail ingestion scan failed: "
                 "inconsistent metadata"
             )
+            mark_error_logged(exc)
             raise
         except GmailListingLimitReached as exc:
+            self.logger.debug(
+                "Gmail ingestion scan aborted: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
             self.logger.error(
                 "Gmail ingestion scan failed: "
                 "result limit reached"
             )
-            raise GmailIngestionError(
-                "Gmail ingestion result limit reached"
+            raise mark_error_logged(
+                GmailIngestionError(
+                    "Gmail ingestion result limit reached"
+                )
             ) from exc
         except (
             GmailClientError,
             IngestionStoreError,
             MessageContentProcessingError,
         ) as exc:
-            self.logger.error(
-                "Gmail ingestion scan failed: "
-                f"{type(exc).__name__}"
+            self.logger.debug(
+                "Gmail ingestion scan aborted: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
             )
-            raise GmailIngestionError(
-                "Gmail ingestion scan failed"
+            if is_error_logged(exc):
+                self.logger.debug(
+                    "Gmail ingestion received an already logged failure: %s",
+                    type(exc).__name__,
+                )
+            else:
+                self.logger.error(
+                    "Gmail ingestion scan failed: "
+                    f"{type(exc).__name__}"
+                )
+            raise mark_error_logged(
+                GmailIngestionError(
+                    "Gmail ingestion scan failed"
+                )
             ) from exc
         except Exception as exc:
+            self.logger.debug(
+                "Gmail ingestion scan aborted: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
             self.logger.error(
                 "Gmail ingestion scan failed: "
                 f"{type(exc).__name__}"
             )
-            raise GmailIngestionError(
-                "Gmail ingestion scan failed"
+            raise mark_error_logged(
+                GmailIngestionError(
+                    "Gmail ingestion scan failed"
+                )
             ) from exc

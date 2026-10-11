@@ -27,6 +27,7 @@ from app.tools.gmail.gmail_client import (
     GmailMessageMetadata,
     GmailMessageReference,
 )
+from app.tools.logger import mark_error_logged
 
 
 APPLICATION_STARTED_AT = datetime(
@@ -565,6 +566,35 @@ class GmailIngestionServiceTests(unittest.TestCase):
             "sensitive-provider-value",
             logged_value,
         )
+
+    def test_already_logged_failure_is_not_recorded_twice(self) -> None:
+        """Verify ingestion does not duplicate an owned lower-layer error."""
+
+        (
+            self.gmail_client
+            .list_message_references
+            .side_effect
+        ) = mark_error_logged(
+            GmailClientError(
+                "sanitized lower-layer failure"
+            )
+        )
+
+        with self.assertRaises(
+            GmailIngestionError
+        ) as raised:
+            self.service.scan()
+
+        self.assertEqual(
+            str(raised.exception),
+            "Gmail ingestion scan failed",
+        )
+        self.service.logger.error.assert_not_called()
+        self.service.logger.debug.assert_any_call(
+            "Gmail ingestion received an already logged failure: %s",
+            "GmailClientError",
+        )
+        self.store.mark_scan_successful.assert_not_called()
 
     def test_classification_failure_keeps_cursor_for_retry(
         self,

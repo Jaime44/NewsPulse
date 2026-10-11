@@ -5,19 +5,19 @@ converting unexpected Google client failures into ``UsersClientError`` and
 recording diagnostic context in the application log.
 """
 
-import sys
-
+from time import perf_counter
 from typing import Any, Dict
 from googleapiclient.discovery import Resource
 
 
-from app.tools.logger import AppLogger
+from app.tools.logger import (
+    AppLogger,
+    mark_error_logged,
+)
 
 
 class UsersClientError(Exception):
     """Raised when a Gmail users-resource request fails."""
-
-    pass
 
 
 class UsersClient:
@@ -49,16 +49,33 @@ class UsersClient:
         Raises:
             UsersClientError: If the request fails.
         """
-        try:
-            return self.service.users().getProfile(userId=user_id).execute()
-        except Exception as e:
-            _, _, exec_tb = sys.exc_info()
-            line_number = exec_tb.tb_lineno if exec_tb else "unknown"
-            function_name = exec_tb.tb_frame.f_code.co_name if exec_tb else "unknown"
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail users.getProfile request started"
+        )
 
+        try:
+            response = (
+                self.service
+                .users()
+                .getProfile(userId=user_id)
+                .execute()
+            )
+            self.logger.debug(
+                "Gmail users.getProfile request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
+        except Exception as exc:
             self.logger.error(
-                f"Unexpected error in '{function_name}' at line {line_number}: {e}")
-            raise UsersClientError("Failed to get user profile") from e
+                "Gmail users.getProfile failed: %s",
+                type(exc).__name__,
+            )
+            raise mark_error_logged(
+                UsersClientError(
+                    "Failed to get user profile"
+                )
+            ) from exc
 
     def stop_notifications(self, user_id: str = "me") -> Dict[str, Any]:
         """Stop Gmail push notifications for a user.
@@ -72,16 +89,33 @@ class UsersClient:
         Raises:
             UsersClientError: If stopping notifications fails.
         """
-        try:
-            return self.service.users().stop(userId=user_id).execute()
-        except Exception as e:
-            _, _, exec_tb = sys.exc_info()
-            line_number = exec_tb.tb_lineno if exec_tb else "unknown"
-            function_name = exec_tb.tb_frame.f_code.co_name if exec_tb else "unknown"
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail users.stop request started"
+        )
 
+        try:
+            response = (
+                self.service
+                .users()
+                .stop(userId=user_id)
+                .execute()
+            )
+            self.logger.info(
+                "Gmail users.stop request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
+        except Exception as exc:
             self.logger.error(
-                f"Unexpected error in '{function_name}' at line {line_number}: {e}")
-            raise UsersClientError("Failed to stop notifications") from e
+                "Gmail users.stop failed: %s",
+                type(exc).__name__,
+            )
+            raise mark_error_logged(
+                UsersClientError(
+                    "Failed to stop notifications"
+                )
+            ) from exc
 
     def watch_inbox(
         self,
@@ -102,13 +136,33 @@ class UsersClient:
             UsersClientError: If setting up the watch fails.
         """
         body = body or {}
-        try:
-            return self.service.users().watch(userId=user_id, body=body).execute()
-        except Exception as e:
-            _, _, exec_tb = sys.exc_info()
-            line_number = exec_tb.tb_lineno if exec_tb else "unknown"
-            function_name = exec_tb.tb_frame.f_code.co_name if exec_tb else "unknown"
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail users.watch request started"
+        )
 
+        try:
+            response = (
+                self.service
+                .users()
+                .watch(
+                    userId=user_id,
+                    body=body,
+                )
+                .execute()
+            )
+            self.logger.info(
+                "Gmail users.watch request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
+        except Exception as exc:
             self.logger.error(
-                f"Unexpected error in '{function_name}' at line {line_number}: {e}")
-            raise UsersClientError("Failed to watch inbox") from e
+                "Gmail users.watch failed: %s",
+                type(exc).__name__,
+            )
+            raise mark_error_logged(
+                UsersClientError(
+                    "Failed to watch inbox"
+                )
+            ) from exc

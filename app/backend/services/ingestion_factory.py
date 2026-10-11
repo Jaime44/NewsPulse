@@ -38,6 +38,7 @@ from app.backend.services.newsletter_classification import (
     NewsletterClassificationService,
 )
 from app.tools.gmail.gmail_client import GmailClient
+from app.tools.logger import AppLogger
 
 
 def build_gmail_ingestion_service(
@@ -58,6 +59,14 @@ def build_gmail_ingestion_service(
     Raises:
         ValueError: If the content retention period is invalid.
     """
+
+    logger = AppLogger(
+        "gmail_ingestion.log"
+    )
+    logger.debug(
+        "Building Gmail ingestion service: retention_days=%d",
+        retention_days,
+    )
 
     ingestion_store = IngestionStore(
         database
@@ -99,7 +108,7 @@ def build_gmail_ingestion_service(
         )
     )
 
-    return GmailIngestionService(
+    service = GmailIngestionService(
         gmail_client=gmail_client,
         store=ingestion_store,
         classification_service=(
@@ -109,3 +118,7 @@ def build_gmail_ingestion_service(
             content_processing_service
         ),
     )
+    logger.debug(
+        "Gmail ingestion service built successfully"
+    )
+    return service

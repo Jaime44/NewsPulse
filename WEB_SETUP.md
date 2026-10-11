@@ -336,8 +336,10 @@ Comprueba:
 - Que la cuenta está autorizada como usuario de prueba.
 - Que el scope configurado es válido.
 
-Consulta los logs utilizando únicamente el nombre de la excepción. No
-publiques códigos OAuth, tokens ni secretos.
+Consulta los logs utilizando el identificador de correlación y el nombre de la
+excepción. No publiques códigos OAuth, tokens ni secretos. Para ampliar el
+diagnóstico local, configura `LOG_LEVEL=DEBUG`; no es necesario cambiar el
+código.
 
 ### HTTP 401 en una ruta Gmail
 
@@ -405,7 +407,7 @@ Antes de desplegar News Pulse será necesario:
 - Gestionar claves y secretos fuera del repositorio.
 - Restringir permisos sobre la base de datos.
 - Definir copias de seguridad compatibles con la clave Fernet.
-- Configurar monitorización y rotación segura de logs.
+- Enviar los archivos rotados a una plataforma de monitorización y alertas.
 - Definir una operación explícita para desconectar y revocar la cuenta.
 
 Con `APP_ENV=production`, News Pulse marca la cookie de sesión como

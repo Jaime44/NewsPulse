@@ -18,6 +18,13 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
+DEFAULT_LOG_DIRECTORY = PROJECT_ROOT / "logs"
+DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_LOG_BACKUP_COUNT = 5
+DEFAULT_LOG_LEVEL = "INFO"
+SUPPORTED_LOG_LEVELS = frozenset(
+    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+)
 
 
 class ConfigurationError(RuntimeError):
@@ -66,6 +73,29 @@ def _resolve_path(name: str) -> Path:
         path = PROJECT_ROOT / path
 
     return path.resolve()
+
+
+def _optional_path(
+    name: str,
+    default: Path,
+) -> Path:
+    """Resolve an optional environment path against the project root.
+
+    Args:
+        name: Name of the environment variable to read.
+        default: Path used when the variable is unset or empty.
+
+    Returns:
+        An absolute, normalized path.
+    """
+
+    raw_value = os.getenv(name, "").strip()
+    path = Path(raw_value) if raw_value else default
+
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+
+    return path.expanduser().resolve()
 
 
 def _required_file(name: str) -> Path:
@@ -146,6 +176,34 @@ def _boolean(name: str, default: str = "false") -> bool:
     return value == "true"
 
 
+def _log_level(
+    name: str = "LOG_LEVEL",
+    default: str = DEFAULT_LOG_LEVEL,
+) -> str:
+    """Read and validate a standard application logging threshold.
+
+    Args:
+        name: Name of the environment variable containing the threshold.
+        default: Severity used when the environment variable is absent.
+
+    Returns:
+        The normalized uppercase logging level.
+
+    Raises:
+        ConfigurationError: If the value is not a supported severity.
+    """
+
+    value = os.getenv(name, default).strip().upper()
+
+    if value not in SUPPORTED_LOG_LEVELS:
+        raise ConfigurationError(
+            f"{name} must be one of: "
+            f"{', '.join(sorted(SUPPORTED_LOG_LEVELS))}"
+        )
+
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     """Hold validated runtime settings for one NewsPulse process.
@@ -163,6 +221,10 @@ class AppConfig:
         token_encryption_key_path: File containing the Fernet key.
         database_path: SQLite database location.
         retention_days: Lifetime of persisted readable message content.
+        log_directory: Directory containing active and archived log files.
+        log_max_bytes: Active-file size that triggers log rotation.
+        log_backup_count: Number of numbered archives retained per log.
+        log_level: Minimum severity written by application loggers.
     """
 
     environment: str
@@ -180,6 +242,10 @@ class AppConfig:
 
     database_path: Path
     retention_days: int
+    log_directory: Path = DEFAULT_LOG_DIRECTORY
+    log_max_bytes: int = DEFAULT_LOG_MAX_BYTES
+    log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
+    log_level: str = DEFAULT_LOG_LEVEL
 
     @classmethod
     def load(
@@ -265,6 +331,19 @@ class AppConfig:
             ),
             database_path=database_path,
             retention_days=_positive_int("RETENTION_DAYS", "30"),
+            log_directory=_optional_path(
+                "LOG_DIRECTORY",
+                DEFAULT_LOG_DIRECTORY,
+            ),
+            log_max_bytes=_positive_int(
+                "LOG_MAX_BYTES",
+                str(DEFAULT_LOG_MAX_BYTES),
+            ),
+            log_backup_count=_positive_int(
+                "LOG_BACKUP_COUNT",
+                str(DEFAULT_LOG_BACKUP_COUNT),
+            ),
+            log_level=_log_level(),
         )
 
 

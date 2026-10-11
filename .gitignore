@@ -13,6 +13,8 @@ venv/
 
 # Logs
 logs/*.log
+logs/*.log.[0-9]*
+logs/*.log.lock
 
 # Databases
 data/*.db

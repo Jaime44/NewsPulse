@@ -19,6 +19,10 @@ from app.tools.gmail.gmail_client import (
     GmailFullMessage,
     GmailMimePart,
 )
+from app.tools.logger import (
+    is_error_logged,
+    mark_error_logged,
+)
 
 
 def encode_text(
@@ -467,6 +471,37 @@ class GmailMessageContentServiceTests(
         self.assertNotIn(
             "sensitive-provider-detail",
             str(raised.exception),
+        )
+
+    def test_logged_gmail_error_marker_survives_content_mapping(self) -> None:
+        """Verify content mapping preserves lower-layer logging ownership."""
+
+        lower_error = mark_error_logged(
+            GmailClientError(
+                "sanitized provider failure"
+            )
+        )
+        (
+            self.gmail_client
+            .get_full_message
+            .side_effect
+        ) = lower_error
+
+        with self.assertRaises(
+            MessageContentError
+        ) as raised:
+            self.service.extract_text_parts(
+                "message-1"
+            )
+
+        self.assertIs(
+            raised.exception.__cause__,
+            lower_error,
+        )
+        self.assertTrue(
+            is_error_logged(
+                raised.exception
+            )
         )
 
     def test_invalid_limits_are_rejected(

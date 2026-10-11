@@ -12,6 +12,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from time import perf_counter
 from urllib.parse import (
     urlsplit,
     urlunsplit,
@@ -20,6 +21,7 @@ from urllib.parse import (
 from app.backend.services.message_content import (
     DecodedTextPart,
 )
+from app.tools.logger import AppLogger
 
 
 class ContentParsingError(RuntimeError):
@@ -537,6 +539,9 @@ class MessageContentParser:
         self.max_url_chars = (
             max_url_chars
         )
+        self.logger = AppLogger(
+            "content_processing.log"
+        )
 
     def parse(
         self,
@@ -557,6 +562,8 @@ class MessageContentParser:
             ContentParsingError: If parts are invalid, no readable text exists,
                 HTML parsing fails, or the selected text exceeds its limit.
         """
+
+        operation_started_at = perf_counter()
 
         if (
             isinstance(parts, (str, bytes))
@@ -659,7 +666,7 @@ class MessageContentParser:
                 "the configured text limit"
             )
 
-        return ExtractedMessageContent(
+        result = ExtractedMessageContent(
             text=selected_text,
             links=_deduplicate_links(
                 collected_links,
@@ -669,3 +676,14 @@ class MessageContentParser:
                 source_mime_type
             ),
         )
+        self.logger.debug(
+            "Readable content parsing completed: input_part_count=%d "
+            "text_chars=%d link_count=%d source_mime_type=%s "
+            "duration_ms=%.2f",
+            len(parts),
+            len(result.text),
+            len(result.links),
+            result.source_mime_type,
+            (perf_counter() - operation_started_at) * 1_000,
+        )
+        return result

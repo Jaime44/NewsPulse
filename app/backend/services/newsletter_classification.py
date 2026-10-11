@@ -23,6 +23,7 @@ from app.backend.services.classifier import (
 from app.tools.gmail.gmail_client import (
     GmailMessageMetadata,
 )
+from app.tools.logger import AppLogger
 
 CLASSIFIER_VERSION = "rules-v1"
 
@@ -212,6 +213,9 @@ class NewsletterClassificationService:
 
         self.source_store = source_store
         self.classifier = classifier
+        self.logger = AppLogger(
+            "classification.log"
+        )
 
     def classify(
         self,
@@ -279,6 +283,13 @@ class NewsletterClassificationService:
             )
 
             if matched_source.decision == "exclude":
+                self.logger.debug(
+                    "Stored source rule selected: message_id=%s "
+                    "source_type=%s origin=%s decision=exclude",
+                    metadata.message_id,
+                    matched_source.source_type,
+                    matched_source.origin,
+                )
                 return NewsletterClassification(
                     verdict=(
                         NewsletterVerdict
@@ -288,6 +299,13 @@ class NewsletterClassificationService:
                     reasons=(reason,),
                 )
 
+            self.logger.debug(
+                "Stored source rule selected: message_id=%s "
+                "source_type=%s origin=%s decision=include",
+                metadata.message_id,
+                matched_source.source_type,
+                matched_source.origin,
+            )
             return NewsletterClassification(
                 verdict=NewsletterVerdict.NEWSLETTER,
                 score=(
@@ -297,4 +315,10 @@ class NewsletterClassificationService:
                 reasons=(reason,),
             )
 
+        self.logger.debug(
+            "No stored source rule matched; using heuristic result: "
+            "message_id=%s verdict=%s",
+            metadata.message_id,
+            heuristic_result.verdict.value,
+        )
         return heuristic_result

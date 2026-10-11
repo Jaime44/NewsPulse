@@ -5,21 +5,22 @@ applies input bounds, logs request-failure diagnostics, and exposes raw
 dictionary responses to the higher-level typed :mod:`gmail_client` adapter.
 """
 
-import sys
 from collections.abc import Sequence
+from time import perf_counter
 
 from typing import Any, Dict
 from googleapiclient.errors import HttpError
 from googleapiclient.discovery import Resource
 
 
-from app.tools.logger import AppLogger
+from app.tools.logger import (
+    AppLogger,
+    mark_error_logged,
+)
 
 
 class MessagesClientError(Exception):
     """Raised when a Gmail message or attachment request fails."""
-
-    pass
 
 
 class MessagesClient:
@@ -144,14 +145,28 @@ class MessagesClient:
                 normalized_labels
             )
 
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail messages.list request started: max_results=%d "
+            "has_page_token=%s label_count=%d",
+            max_results,
+            page_token is not None,
+            len(label_ids) if label_ids is not None else 0,
+        )
+
         try:
-            return (
+            response = (
                 self.service
                 .users()
                 .messages()
                 .list(**request_parameters)
                 .execute()
             )
+            self.logger.debug(
+                "Gmail messages.list request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
         except HttpError as exc:
             status_code = getattr(
                 exc.resp,
@@ -162,16 +177,20 @@ class MessagesClient:
                 "Gmail messages.list failed with "
                 f"HTTP status {status_code}"
             )
-            raise MessagesClientError(
-                "Failed to list Gmail messages"
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Failed to list Gmail messages"
+                )
             ) from exc
         except Exception as exc:
             self.logger.error(
                 "Gmail messages.list failed: "
                 f"{type(exc).__name__}"
             )
-            raise MessagesClientError(
-                "Failed to list Gmail messages"
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Failed to list Gmail messages"
+                )
             ) from exc
 
     def get_message(
@@ -270,14 +289,27 @@ class MessagesClient:
                 normalized_headers
             )
 
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail messages.get request started: format=%s",
+            normalized_format,
+        )
+
         try:
-            return (
+            response = (
                 self.service
                 .users()
                 .messages()
                 .get(**request_parameters)
                 .execute()
             )
+            self.logger.debug(
+                "Gmail messages.get request completed: format=%s "
+                "duration_ms=%.2f",
+                normalized_format,
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
         except HttpError as exc:
             status_code = getattr(
                 exc.resp,
@@ -288,16 +320,20 @@ class MessagesClient:
                 "Gmail messages.get failed with "
                 f"HTTP status {status_code}"
             )
-            raise MessagesClientError(
-                "Failed to retrieve Gmail message"
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Failed to retrieve Gmail message"
+                )
             ) from exc
         except Exception as exc:
             self.logger.error(
                 "Gmail messages.get failed: "
                 f"{type(exc).__name__}"
             )
-            raise MessagesClientError(
-                "Failed to retrieve Gmail message"
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Failed to retrieve Gmail message"
+                )
             ) from exc
 
     def get_attachment(
@@ -344,8 +380,13 @@ class MessagesClient:
                 "user_id is required"
             )
 
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail attachments.get request started"
+        )
+
         try:
-            return (
+            response = (
                 self.service
                 .users()
                 .messages()
@@ -357,6 +398,11 @@ class MessagesClient:
                 )
                 .execute()
             )
+            self.logger.debug(
+                "Gmail attachments.get request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
         except HttpError as exc:
             status_code = getattr(
                 exc.resp,
@@ -367,19 +413,27 @@ class MessagesClient:
                 "Gmail attachments.get failed with "
                 f"HTTP status {status_code}"
             )
-            raise MessagesClientError(
-                "Failed to retrieve Gmail attachment"
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Failed to retrieve Gmail attachment"
+                )
             ) from exc
         except Exception as exc:
             self.logger.error(
                 "Gmail attachments.get failed: "
                 f"{type(exc).__name__}"
             )
-            raise MessagesClientError(
-                "Failed to retrieve Gmail attachment"
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Failed to retrieve Gmail attachment"
+                )
             ) from exc
 
-    def send_message(self, message: Dict[str, Any], user_id: str = "me") -> Dict[str, Any]:
+    def send_message(
+        self,
+        message: Dict[str, Any],
+        user_id: str = "me",
+    ) -> Dict[str, Any]:
         """Send a message on behalf of a Gmail user.
 
         Args:
@@ -392,18 +446,30 @@ class MessagesClient:
         Raises:
             MessagesClientError: If the request fails.
         """
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail messages.send request started"
+        )
+
         try:
-            return self.service.users().messages().send(
+            response = self.service.users().messages().send(
                 userId=user_id, body=message
             ).execute()
-        except Exception as e:
-            _, _, exec_tb = sys.exc_info()
-            line_number = exec_tb.tb_lineno if exec_tb else "unknown"
-            function_name = exec_tb.tb_frame.f_code.co_name if exec_tb else "unknown"
-
+            self.logger.info(
+                "Gmail messages.send request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
+        except Exception as exc:
             self.logger.error(
-                f"Error in '{function_name}' at line {line_number}: {e}")
-            raise MessagesClientError("Send message failed") from e
+                "Gmail messages.send failed: %s",
+                type(exc).__name__,
+            )
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Send message failed"
+                )
+            ) from exc
 
     def delete_message(self, message_id: str, user_id: str = "me") -> Dict[str, Any]:
         """Permanently delete one Gmail message.
@@ -418,15 +484,27 @@ class MessagesClient:
         Raises:
             MessagesClientError: If the request fails.
         """
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Gmail messages.delete request started"
+        )
+
         try:
-            return self.service.users().messages().delete(
+            response = self.service.users().messages().delete(
                 userId=user_id, id=message_id
             ).execute()
-        except Exception as e:
-            _, _, exec_tb = sys.exc_info()
-            line_number = exec_tb.tb_lineno if exec_tb else "unknown"
-            function_name = exec_tb.tb_frame.f_code.co_name if exec_tb else "unknown"
-
+            self.logger.info(
+                "Gmail messages.delete request completed: duration_ms=%.2f",
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return response
+        except Exception as exc:
             self.logger.error(
-                f"Error in '{function_name}' at line {line_number}: {e}")
-            raise MessagesClientError("Delete message failed") from e
+                "Gmail messages.delete failed: %s",
+                type(exc).__name__,
+            )
+            raise mark_error_logged(
+                MessagesClientError(
+                    "Delete message failed"
+                )
+            ) from exc

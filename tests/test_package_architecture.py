@@ -25,6 +25,14 @@ LEGACY_MARKERS = (
     "sys.path.append",
 )
 
+REQUIRED_LOG_IGNORE_PATTERNS = frozenset(
+    {
+        "logs/*.log",
+        "logs/*.log.[0-9]*",
+        "logs/*.log.lock",
+    }
+)
+
 
 class PackageArchitectureTests(unittest.TestCase):
     """Verify package-boundary and OAuth architecture invariants."""
@@ -59,6 +67,25 @@ class PackageArchitectureTests(unittest.TestCase):
                 violations[str(relative_path)] = matches
 
         self.assertEqual(violations, {})
+
+    def test_runtime_log_artifacts_are_ignored(self) -> None:
+        """Active logs, numeric archives, and lock files must stay untracked."""
+
+        ignore_patterns = {
+            line.strip()
+            for line in (
+                PROJECT_ROOT / ".gitignore"
+            ).read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+            and not line.lstrip().startswith("#")
+        }
+
+        self.assertTrue(
+            REQUIRED_LOG_IGNORE_PATTERNS
+            <= ignore_patterns
+        )
 
 
 if __name__ == "__main__":

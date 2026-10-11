@@ -156,6 +156,10 @@ Las variables admitidas están definidas en `.env.example`.
 | `APP_PORT` | Puerto HTTP local. Por defecto, `5000`. |
 | `APP_TIMEZONE` | Zona horaria IANA. Para el proyecto: `Europe/Madrid`. |
 | `APP_DEBUG` | Activa o desactiva el modo debug. |
+| `LOG_DIRECTORY` | Directorio de logs. Las rutas relativas se resuelven desde la raíz del proyecto. Por defecto, `logs`. |
+| `LOG_MAX_BYTES` | Tamaño máximo de cada archivo activo antes de rotarlo. Por defecto, `10485760` (10 MB). |
+| `LOG_BACKUP_COUNT` | Número máximo de copias numeradas conservadas por archivo. Por defecto, `5`. |
+| `LOG_LEVEL` | Umbral de aplicación: `DEBUG`, `INFO`, `WARNING`, `ERROR` o `CRITICAL`. Por defecto, `INFO`. |
 | `GOOGLE_APPLICATION_CREDENTIALS_WEB_APP` | Ruta al JSON OAuth de Google. |
 | `GOOGLE_REDIRECT_URI` | Callback OAuth autorizado. |
 | `GOOGLE_SCOPES` | Scopes separados por comas. |
@@ -172,6 +176,38 @@ FLASK_SECRET_KEY_PATH=secrets/flask_secret.key
 TOKEN_ENCRYPTION_KEY_PATH=secrets/token_encryption.key
 DATABASE_PATH=data/newspulse.db
 ```
+
+## Logging y rotación
+
+`AppLogger` centraliza los registros de la aplicación. Cada línea incluye fecha
+y hora con milisegundos y offset de `APP_TIMEZONE`, nivel, componente, función y
+un identificador de correlación para las peticiones HTTP. Los flujos de
+ingestión añaden etapas, contadores y duraciones sin registrar contenido de
+mensajes, credenciales ni cabeceras de autorización.
+
+Los archivos se rotan al alcanzar `LOG_MAX_BYTES`. La copia `.1` es la más
+reciente y se conservan como máximo `LOG_BACKUP_COUNT` copias numeradas por
+archivo. La rotación conserva archivos existentes, añade nuevos registros al
+archivo activo y sólo elimina copias numéricas que exceden la política; no
+modifica archivos históricos con nombres personalizados.
+
+En Linux, un bloqueo lateral por archivo coordina escrituras y rotaciones entre
+procesos, incluido el reloader de desarrollo. En plataformas sin bloqueos POSIX
+debe utilizarse un único proceso escritor o una arquitectura externa de cola y
+agregación de logs.
+
+Para depuración local basta con cambiar la configuración, sin modificar código:
+
+```ini
+LOG_LEVEL=DEBUG
+```
+
+El formateador enmascara patrones habituales de tokens, contraseñas, claves API,
+cookies y autorización. Esta defensa complementa, pero no sustituye, la regla de
+no enviar nunca datos sensibles o contenidos completos a los métodos de log.
+Si el propio handler no puede escribir o rotar un archivo, el flujo de la
+aplicación continúa y el diagnóstico alternativo omite íntegramente el registro
+original para no saltarse la redacción central.
 
 ## Configuración de Google OAuth
 
@@ -278,6 +314,7 @@ implementarse explícitamente si se necesita.
 - Un identificador de cuenta inválido limpia la sesión y no se utiliza
   para consultar otra cuenta.
 - Los errores OAuth no registran códigos, tokens ni mensajes sensibles.
+- Los logs aplican filtrado de secretos y rotación con retención acotada.
 
 En producción son obligatorios HTTPS, un servidor WSGI y una gestión
 externa de secretos adecuada.

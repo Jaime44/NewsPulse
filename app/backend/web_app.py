@@ -12,9 +12,13 @@ import hmac
 import os
 
 from threading import Lock
+from time import perf_counter
+from uuid import uuid4
 
 from flask import (
     Flask,
+    Response,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -47,7 +51,10 @@ from app.backend.services.gmail_ingestion import (
 from app.backend.services.ingestion_factory import (
     build_gmail_ingestion_service,
 )
-from app.tools.logger import AppLogger
+from app.tools.logger import (
+    AppLogger,
+    is_error_logged,
+)
 from app.config import AppConfig, read_secret_file
 from app.tools.gmail.gmail_client import GmailClient
 
@@ -80,19 +87,49 @@ NEWSLETTER_SOURCE_IDENTIFIER_FIELDS = frozenset(
 ingestion_scan_lock = Lock()
 
 
-logger = AppLogger("web_app.log")
-logger.debug(f"START: ")
-
 settings = AppConfig.load()
 
-database = Database(settings.database_path)
-
-oauth_store = OAuthCredentialStore(
-    database=database,
-    encryption_key_path=settings.token_encryption_key_path,
+AppLogger.configure(
+    log_directory=settings.log_directory,
+    max_bytes=settings.log_max_bytes,
+    backup_count=settings.log_backup_count,
+    level=settings.log_level,
+    timezone=settings.timezone,
 )
-newsletter_source_store = NewsletterSourceStore(
-    database
+logger = AppLogger("web_app.log")
+
+logger.info(
+    "Initializing NewsPulse application: environment=%s log_level=%s",
+    settings.environment,
+    settings.log_level,
+)
+
+persistence_started_at = perf_counter()
+logger.debug(
+    "Persistence initialization started"
+)
+
+try:
+    database = Database(settings.database_path)
+
+    oauth_store = OAuthCredentialStore(
+        database=database,
+        encryption_key_path=settings.token_encryption_key_path,
+    )
+    newsletter_source_store = NewsletterSourceStore(
+        database
+    )
+except Exception as exc:
+    logger.critical(
+        "Application startup aborted while initializing persistence: %s",
+        type(exc).__name__,
+        exc_info=True,
+    )
+    raise
+
+logger.debug(
+    "Persistence initialization completed: duration_ms=%.2f",
+    (perf_counter() - persistence_started_at) * 1_000,
 )
 
 app = Flask(
@@ -115,9 +152,109 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
 )
 
-app.secret_key = read_secret_file(
-    settings.flask_secret_key_path
+try:
+    app.secret_key = read_secret_file(
+        settings.flask_secret_key_path
+    )
+except Exception as exc:
+    logger.critical(
+        "Application startup aborted while loading the Flask secret: %s",
+        type(exc).__name__,
+        exc_info=True,
+    )
+    raise
+
+logger.info(
+    "NewsPulse application initialized successfully"
 )
+
+
+@app.before_request
+def log_request_started() -> None:
+    """Create request correlation context and record the HTTP boundary."""
+
+    correlation_id = uuid4().hex
+    g.log_correlation_token = (
+        AppLogger.set_correlation_id(
+            correlation_id
+        )
+    )
+    g.request_started_at = perf_counter()
+    logger.info(
+        "HTTP request started: method=%s path=%s",
+        request.method,
+        request.path,
+    )
+
+
+@app.after_request
+def log_request_completed(
+    response: Response,
+) -> Response:
+    """Record HTTP status and duration without logging request contents.
+
+    Args:
+        response: Flask response produced for the current request.
+
+    Returns:
+        The unchanged response passed to the remaining Flask lifecycle.
+    """
+
+    started_at = getattr(
+        g,
+        "request_started_at",
+        None,
+    )
+    duration_ms = (
+        (perf_counter() - started_at) * 1_000
+        if started_at is not None
+        else 0.0
+    )
+    logger.info(
+        "HTTP request completed: method=%s path=%s status=%d "
+        "duration_ms=%.2f",
+        request.method,
+        request.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
+
+@app.teardown_request
+def clear_request_log_context(
+    unhandled_error: BaseException | None,
+) -> None:
+    """Report unhandled failures and release request correlation context.
+
+    Args:
+        unhandled_error: Exception escaping request dispatch, when present.
+    """
+
+    if unhandled_error is not None:
+        sanitized_error = RuntimeError(
+            "Exception details redacted"
+        )
+        logger.error(
+            "Unhandled HTTP request failure: %s",
+            type(unhandled_error).__name__,
+            exc_info=(
+                RuntimeError,
+                sanitized_error,
+                unhandled_error.__traceback__,
+            ),
+        )
+
+    correlation_token = getattr(
+        g,
+        "log_correlation_token",
+        None,
+    )
+
+    if correlation_token is not None:
+        AppLogger.reset_correlation_id(
+            correlation_token
+        )
 
 def get_authenticated_account(
 ) -> StoredOAuthCredentials | None:
@@ -169,16 +306,34 @@ def get_authenticated_gmail_service() -> Resource | None:
     if stored_account is None:
         return None
 
+    refresh_required = (
+        not stored_account.credentials.valid
+    )
+    logger.debug(
+        "Validating stored Google credentials: refresh_required=%s",
+        refresh_required,
+    )
     credentials = ensure_valid_credentials(
         account=stored_account,
         store=oauth_store,
     )
 
-    return build(
+    if refresh_required:
+        logger.info(
+            "Google credentials refreshed and persisted successfully"
+        )
+
+    service_started_at = perf_counter()
+    gmail_service = build(
         "gmail",
         "v1",
         credentials=credentials,
     )
+    logger.debug(
+        "Authenticated Gmail service built: duration_ms=%.2f",
+        (perf_counter() - service_started_at) * 1_000,
+    )
+    return gmail_service
 
 def has_valid_action_header(
     expected_value: str,
@@ -260,7 +415,9 @@ def google_auth() -> ResponseReturnValue:
         )
 
         flow.redirect_uri = settings.google_redirect_uri
-        logger.debug(f"OAuth flow created with redirect URI: {flow.redirect_uri}")
+        logger.debug(
+            "OAuth authorization flow created"
+        )
         # Generate authorization URL
         authorization_url, state = flow.authorization_url(
             access_type="offline",
@@ -274,7 +431,7 @@ def google_auth() -> ResponseReturnValue:
         
     except Exception as exc:
         logger.error(
-            f"Google auth initiation failed: "
+            "Google auth initiation failed: "
             f"{type(exc).__name__}"
         )
         return jsonify(
@@ -392,7 +549,7 @@ def google_callback() -> ResponseReturnValue:
         
     except Exception as exc:
         logger.error(
-            f"Google callback failed: "
+            "Google callback failed: "
             f"{type(exc).__name__}"
         )
         return jsonify(
@@ -476,10 +633,16 @@ def get_gmail_profile() -> ResponseReturnValue:
         ), 503
 
     except Exception as exc:
-        logger.error(
-            f"Failed to get Gmail profile: "
-            f"{type(exc).__name__}"
-        )
+        if is_error_logged(exc):
+            logger.debug(
+                "Gmail profile route received an already logged failure: %s",
+                type(exc).__name__,
+            )
+        else:
+            logger.error(
+                "Failed to get Gmail profile: "
+                f"{type(exc).__name__}"
+            )
         return jsonify(
             {"error": "Failed to retrieve profile"}
         ), 500
@@ -544,7 +707,7 @@ def get_gmail_messages() -> ResponseReturnValue:
 
     except Exception as exc:
         logger.error(
-            f"Failed to get Gmail messages: "
+            "Failed to get Gmail messages: "
             f"{type(exc).__name__}"
         )
         return jsonify(
@@ -586,6 +749,11 @@ def get_newsletter_sources() -> ResponseReturnValue:
         )
         response.headers["Cache-Control"] = (
             "no-store"
+        )
+
+        logger.info(
+            "Newsletter sources listed: count=%d",
+            len(sources),
         )
 
         return response
@@ -687,6 +855,12 @@ def save_newsletter_source() -> ResponseReturnValue:
             "no-store"
         )
 
+        logger.info(
+            "Newsletter source saved: source_type=%s decision=%s",
+            source.source_type,
+            source.decision,
+        )
+
         return response
 
     except NewsletterSourceStoreError:
@@ -784,6 +958,11 @@ def deactivate_newsletter_source() -> ResponseReturnValue:
             "no-store"
         )
 
+        logger.info(
+            "Newsletter source deactivated: source_type=%s",
+            payload["source_type"],
+        )
+
         return response
 
     except NewsletterSourceStoreError:
@@ -851,6 +1030,9 @@ def run_gmail_ingestion() -> ResponseReturnValue:
         )
 
         if not scan_lock_acquired:
+            logger.warning(
+                "Manual ingestion request skipped because a scan is running"
+            )
             return jsonify(
                 {
                     "error": (
@@ -956,10 +1138,17 @@ def run_gmail_ingestion() -> ResponseReturnValue:
         ), 503
 
     except GmailIngestionError as exc:
-        logger.error(
-            "Manual Gmail ingestion failed: "
-            f"{type(exc).__name__}"
-        )
+        if is_error_logged(exc):
+            logger.debug(
+                "Manual ingestion route received an already logged "
+                "service failure: %s",
+                type(exc).__name__,
+            )
+        else:
+            logger.error(
+                "Manual Gmail ingestion failed: "
+                f"{type(exc).__name__}"
+            )
         return jsonify(
             {
                 "error": (
@@ -991,6 +1180,10 @@ def logout() -> ResponseReturnValue:
     """
 
     session.clear()
+
+    logger.info(
+        "User session logged out"
+    )
 
     return redirect(
         url_for("index")

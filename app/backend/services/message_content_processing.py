@@ -7,6 +7,7 @@ lower-level retrieval, parsing, and storage failures to one stable exception.
 from __future__ import annotations
 
 from datetime import datetime
+from time import perf_counter
 
 from app.backend.bd.message_content_store import (
     MessageContentStore,
@@ -20,6 +21,11 @@ from app.backend.services.content_parser import (
 from app.backend.services.message_content import (
     GmailMessageContentService,
     MessageContentError,
+)
+from app.tools.logger import (
+    AppLogger,
+    is_error_logged,
+    mark_error_logged,
 )
 
 
@@ -59,6 +65,9 @@ class MessageContentProcessingService:
         )
         self.parser = parser
         self.store = store
+        self.logger = AppLogger(
+            "content_processing.log"
+        )
 
     def purge_expired(
         self,
@@ -76,10 +85,19 @@ class MessageContentProcessingService:
             MessageContentProcessingError: If the repository rejects the purge.
         """
 
+        operation_started_at = perf_counter()
+
         try:
-            return self.store.purge_expired(
+            deleted_count = self.store.purge_expired(
                 expired_at=expired_at
             )
+            self.logger.debug(
+                "Message content retention purge completed: "
+                "deleted_count=%d duration_ms=%.2f",
+                deleted_count,
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return deleted_count
         except MessageContentStoreError as exc:
             raise MessageContentProcessingError(
                 "Failed to purge expired "
@@ -108,6 +126,12 @@ class MessageContentProcessingService:
                 fails.
         """
 
+        operation_started_at = perf_counter()
+        self.logger.debug(
+            "Message content pipeline started: message_id=%s",
+            gmail_message_id,
+        )
+
         try:
             decoded_parts = (
                 self.content_service
@@ -125,7 +149,7 @@ class MessageContentProcessingService:
                 )
             )
 
-            return self.store.save_content(
+            stored_content = self.store.save_content(
                 gmail_message_id,
                 text=extracted_content.text,
                 links=extracted_content.links,
@@ -135,13 +159,32 @@ class MessageContentProcessingService:
                 ),
                 extracted_at=extracted_at,
             )
+            self.logger.debug(
+                "Message content pipeline completed: message_id=%s "
+                "part_count=%d text_chars=%d link_count=%d "
+                "source_mime_type=%s duration_ms=%.2f",
+                gmail_message_id,
+                len(decoded_parts),
+                len(extracted_content.text),
+                len(extracted_content.links),
+                extracted_content.source_mime_type,
+                (perf_counter() - operation_started_at) * 1_000,
+            )
+            return stored_content
 
         except (
             MessageContentError,
             ContentParsingError,
             MessageContentStoreError,
         ) as exc:
-            raise MessageContentProcessingError(
+            processing_error = MessageContentProcessingError(
                 "Failed to process Gmail "
                 "message content"
-            ) from exc
+            )
+
+            if is_error_logged(exc):
+                mark_error_logged(
+                    processing_error
+                )
+
+            raise processing_error from exc

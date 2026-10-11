@@ -15,6 +15,7 @@ from enum import Enum
 from app.tools.gmail.gmail_client import (
     GmailMessageMetadata,
 )
+from app.tools.logger import AppLogger
 
 
 class NewsletterClassifierError(ValueError):
@@ -157,6 +158,9 @@ class NewsletterClassifier:
                 case_sensitive=False,
             )
         )
+        self.logger = AppLogger(
+            "classification.log"
+        )
 
     def classify(
         self,
@@ -260,8 +264,17 @@ class NewsletterClassifier:
                 NewsletterVerdict.NOT_NEWSLETTER
             )
 
-        return NewsletterClassification(
+        result = NewsletterClassification(
             verdict=verdict,
             score=score,
             reasons=tuple(reasons),
         )
+        self.logger.debug(
+            "Heuristic newsletter classification completed: "
+            "message_id=%s verdict=%s score=%d reason_count=%d",
+            metadata.message_id,
+            result.verdict.value,
+            result.score,
+            len(result.reasons),
+        )
+        return result

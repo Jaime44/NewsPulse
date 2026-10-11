@@ -29,6 +29,10 @@ from app.backend.services.message_content_processing import (
     MessageContentProcessingError,
     MessageContentProcessingService,
 )
+from app.tools.logger import (
+    is_error_logged,
+    mark_error_logged,
+)
 
 
 EXTRACTED_AT = datetime(
@@ -205,6 +209,38 @@ class MessageContentProcessingServiceTests(
 
         self.parser.parse.assert_not_called()
         self.store.save_content.assert_not_called()
+
+    def test_logged_error_marker_survives_processing_mapping(self) -> None:
+        """Verify processing preserves lower-layer logging ownership."""
+
+        decoding_error = mark_error_logged(
+            MessageContentError(
+                "sanitized decoding failure"
+            )
+        )
+        (
+            self.content_service
+            .extract_text_parts
+            .side_effect
+        ) = decoding_error
+
+        with self.assertRaises(
+            MessageContentProcessingError
+        ) as raised:
+            self.service.process_message(
+                "gmail-message-1",
+                extracted_at=EXTRACTED_AT,
+            )
+
+        self.assertIs(
+            raised.exception.__cause__,
+            decoding_error,
+        )
+        self.assertTrue(
+            is_error_logged(
+                raised.exception
+            )
+        )
 
     def test_parsing_error_stops_before_storage(
         self,

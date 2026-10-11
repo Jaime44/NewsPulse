@@ -19,6 +19,7 @@ from app.tools.gmail.gmail_client import (
 from app.tools.gmail.messages_client import (
     MessagesClientError,
 )
+from app.tools.logger import mark_error_logged
 
 
 class GmailClientPaginationTests(unittest.TestCase):
@@ -430,6 +431,27 @@ class GmailClientPaginationTests(unittest.TestCase):
         self.assertNotIn(
             "sensitive-lower-level-value",
             logged_value,
+        )
+
+    def test_already_logged_client_error_is_not_duplicated(
+        self,
+    ) -> None:
+        """Verify that a lower-level failure is not logged twice."""
+
+        lower_error = mark_error_logged(
+            MessagesClientError(
+                "sanitized lower-level failure"
+            )
+        )
+        self.list_page.side_effect = lower_error
+
+        with self.assertRaises(GmailClientError):
+            self.client.list_message_references()
+
+        self.client.logger.error.assert_not_called()
+        self.client.logger.debug.assert_any_call(
+            "Gmail message pagination received an already logged "
+            "client failure"
         )
 
 
