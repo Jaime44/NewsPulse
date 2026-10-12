@@ -12,6 +12,7 @@ from datetime import (
 from unittest.mock import Mock
 
 from app.backend.bd.ingestion_store import (
+    IngestionRunCounters,
     IngestionState,
 )
 from app.backend.services.classifier import (
@@ -111,6 +112,12 @@ class GmailIngestionContentTests(
             .get_or_create_state
             .return_value
         ) = self.state
+        self.store.start_scan_run.return_value = 17
+        (
+            self.content_processing_service
+            .purge_expired
+            .return_value
+        ) = 0
 
         (
             self.store
@@ -156,6 +163,28 @@ class GmailIngestionContentTests(
             clock=lambda: SCAN_STARTED_AT,
         )
         self.service.logger = Mock()
+
+    def assert_run_completed(
+        self,
+        counters: IngestionRunCounters,
+    ) -> None:
+        """Verify one scan run was started and atomically completed.
+
+        Args:
+            counters: Expected durable scan counters.
+        """
+
+        self.store.start_scan_run.assert_called_once_with(
+            started_at=SCAN_STARTED_AT
+        )
+        self.store.complete_scan_run.assert_called_once_with(
+            17,
+            finished_at=SCAN_STARTED_AT,
+            cursor_before=APPLICATION_STARTED_AT,
+            cursor_after=SCAN_STARTED_AT,
+            counters=counters,
+        )
+        self.store.fail_scan_run.assert_not_called()
 
     def configure_verdict(
         self,
@@ -254,11 +283,11 @@ class GmailIngestionContentTests(
             .assert_not_called()
         )
 
-        (
-            self.store
-            .mark_scan_successful
-            .assert_called_once_with(
-                completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                discovered_count=1,
+                newsletter_count=1,
             )
         )
 
@@ -418,8 +447,24 @@ class GmailIngestionContentTests(
         )
         (
             self.store
-            .mark_scan_successful
+            .complete_scan_run
             .assert_not_called()
+        )
+        self.store.start_scan_run.assert_called_once_with(
+            started_at=SCAN_STARTED_AT
+        )
+        self.store.fail_scan_run.assert_called_once_with(
+            17,
+            failed_at=SCAN_STARTED_AT,
+            error_code=(
+                "content_processing_failed"
+            ),
+            counters=IngestionRunCounters(
+                listed_count=1,
+                discovered_count=1,
+                newsletter_count=1,
+            ),
+            cursor_before=APPLICATION_STARTED_AT,
         )
 
         logged_value = (
@@ -524,11 +569,10 @@ class GmailIngestionContentTests(
             )
         )
 
-        (
-            self.store
-            .mark_scan_successful
-            .assert_called_once_with(
-                completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                already_known_count=1,
             )
         )
 
@@ -597,11 +641,10 @@ class GmailIngestionContentTests(
             .assert_not_called()
         )
 
-        (
-            self.store
-            .mark_scan_successful
-            .assert_called_once_with(
-                completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                already_known_count=1,
             )
         )
 
@@ -639,12 +682,8 @@ class GmailIngestionContentTests(
             )
         )
 
-        (
-            self.store
-            .mark_scan_successful
-            .assert_called_once_with(
-                completed_at=SCAN_STARTED_AT
-            )
+        self.assert_run_completed(
+            IngestionRunCounters()
         )
 
     def test_purge_failure_stops_scan_before_gmail(
@@ -698,8 +737,20 @@ class GmailIngestionContentTests(
         )
         (
             self.store
-            .mark_scan_successful
+            .complete_scan_run
             .assert_not_called()
+        )
+        self.store.start_scan_run.assert_called_once_with(
+            started_at=SCAN_STARTED_AT
+        )
+        self.store.fail_scan_run.assert_called_once_with(
+            17,
+            failed_at=SCAN_STARTED_AT,
+            error_code=(
+                "content_processing_failed"
+            ),
+            counters=IngestionRunCounters(),
+            cursor_before=None,
         )
 
         logged_value = (

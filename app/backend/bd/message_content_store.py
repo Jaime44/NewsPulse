@@ -410,7 +410,7 @@ class MessageContentStore:
 
         Raises:
             MessageContentStoreError: If data is invalid or the parent message
-                has not been registered.
+                has not been registered and classified as a newsletter.
         """
 
         message_id = _normalize_identifier(
@@ -450,10 +450,15 @@ class MessageContentStore:
         with self.database.connect() as connection:
             message_row = connection.execute(
                 """
-                SELECT id
+                SELECT
+                    gmail_messages.id,
+                    message_classifications.verdict
                 FROM gmail_messages
-                WHERE account_id = ?
-                  AND gmail_message_id = ?
+                LEFT JOIN message_classifications
+                    ON message_classifications.gmail_message_row_id =
+                        gmail_messages.id
+                WHERE gmail_messages.account_id = ?
+                  AND gmail_messages.gmail_message_id = ?
                 """,
                 (
                     self.ACCOUNT_ID,
@@ -465,6 +470,12 @@ class MessageContentStore:
                 raise MessageContentStoreError(
                     "The Gmail message has not "
                     "been registered"
+                )
+
+            if message_row["verdict"] != "newsletter":
+                raise MessageContentStoreError(
+                    "Content can only be stored for "
+                    "a newsletter"
                 )
 
             gmail_message_row_id = (

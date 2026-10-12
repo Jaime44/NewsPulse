@@ -165,7 +165,9 @@ Las variables admitidas están definidas en `.env.example`.
 | `GOOGLE_SCOPES` | Scopes separados por comas. |
 | `FLASK_SECRET_KEY_PATH` | Archivo con la clave que firma la sesión Flask. |
 | `TOKEN_ENCRYPTION_KEY_PATH` | Archivo con la clave Fernet. |
-| `DATABASE_PATH` | Ruta de la base SQLite local. |
+| `DATABASE_PATH` | Ruta de la base SQLite local. Su directorio padre debe estar dedicado al almacenamiento privado de News Pulse. |
+| `SQLITE_BUSY_TIMEOUT_MS` | Tiempo máximo en milisegundos que SQLite espera a otro escritor. Por defecto, `5000`. |
+| `INGESTION_LEASE_SECONDS` | Vigencia de cada latido del lease exclusivo de ingestión. Por defecto, `900`. |
 | `RETENTION_DAYS` | Días que se conservan el texto y los enlaces extraídos. La purga se ejecuta al inicio de cada escaneo. |
 
 Ejemplo de rutas locales:
@@ -175,7 +177,51 @@ GOOGLE_APPLICATION_CREDENTIALS_WEB_APP=secrets/google_oauth_web.json
 FLASK_SECRET_KEY_PATH=secrets/flask_secret.key
 TOKEN_ENCRYPTION_KEY_PATH=secrets/token_encryption.key
 DATABASE_PATH=data/newspulse.db
+SQLITE_BUSY_TIMEOUT_MS=5000
+INGESTION_LEASE_SECONDS=900
 ```
+
+En sistemas POSIX, la inicialización restringe automáticamente el directorio
+padre de `DATABASE_PATH` a `0700` y el archivo SQLite a `0600`. No configures la
+base directamente dentro de un directorio compartido, porque News Pulse trata
+ese directorio como almacenamiento privado de la aplicación.
+
+SQLite utiliza un esquema versionado mediante `PRAGMA user_version`. La versión
+actual es `4`. Al arrancar, News Pulse aplica las migraciones pendientes en
+orden y dentro de una única transacción, valida las columnas, índices y claves
+foráneas resultantes, y rechaza bases creadas por una versión más reciente de la
+aplicación. La versión 2 añade validación en SQLite para las fechas UTC, los
+arrays JSON, la coherencia del ciclo de procesamiento y la relación entre el
+contenido retenido y su clasificación `newsletter`. Una fila `processed` puede
+permanecer sin contenido después de la purga de retención prevista. Las bases
+heredadas sin versión solo se marcan como actuales si su estructura y sus datos
+son compatibles.
+
+La versión 3 incorpora historial operativo sin duplicar el cuerpo de los
+correos. `ingestion_runs` registra cada intento, su resultado, cursores,
+contadores y un código de error seguro. Los historiales de estado y
+clasificación conservan las transiciones y decisiones mientras las tablas
+originales continúan representando el estado actual. El cierre satisfactorio
+de un escaneo y el avance de su cursor se confirman en una sola transacción.
+
+La versión 4 activa el modo WAL, aplica `SQLITE_BUSY_TIMEOUT_MS` a cada conexión
+y añade un lease renovable a `ingestion_runs`. Un índice parcial permite una
+sola ejecución `running` por cuenta incluso entre varios procesos. Si el proceso
+propietario termina abruptamente, el lease caduca; el siguiente intento marca
+esa ejecución como `failed` con un código seguro y adquiere un lease nuevo sin
+avanzar el cursor anterior. El bloqueo local del endpoint se conserva como una
+optimización, pero la exclusión real reside en SQLite.
+
+Este diseño permite varios procesos de aplicación sobre una misma base en un
+único host. No convierte SQLite en almacenamiento distribuido: varias máquinas,
+un sistema de archivos de red o un volumen compartido requieren una base de
+datos y un mecanismo de coordinación diseñados para ese entorno.
+
+Antes de instalar una versión que incluya nuevas migraciones, detén la
+aplicación y crea una copia privada de SQLite en un almacenamiento cifrado. Las
+copias bajo `data/backups/` y los archivos `*.db.bak*` están excluidos de Git,
+pero siguen conteniendo información sensible y no deben conservarse sin una
+política de retención.
 
 ## Logging y rotación
 
@@ -307,6 +353,8 @@ implementarse explícitamente si se necesita.
 - `.env`, claves, tokens, bases de datos, logs e imágenes generadas están
   excluidos de Git.
 - Las credenciales OAuth se cifran antes de almacenarse en SQLite.
+- En sistemas POSIX, el directorio de la base utiliza permisos `0700` y el
+  archivo SQLite utiliza `0600`.
 - La sesión Flask está firmada y no contiene credenciales.
 - La cookie utiliza `HttpOnly` y `SameSite=Lax`.
 - `Secure` se activa automáticamente cuando `APP_ENV=production`.
@@ -315,6 +363,11 @@ implementarse explícitamente si se necesita.
   para consultar otra cuenta.
 - Los errores OAuth no registran códigos, tokens ni mensajes sensibles.
 - Los logs aplican filtrado de secretos y rotación con retención acotada.
+
+El cifrado Fernet protege las credenciales OAuth, pero el texto extraído y los
+identificadores de mensajes no se cifran individualmente dentro de SQLite. Para
+protegerlos frente a la pérdida física del dispositivo o de una copia de
+seguridad debe utilizarse cifrado de disco o de volumen.
 
 En producción son obligatorios HTTPS, un servidor WSGI y una gestión
 externa de secretos adecuada.
@@ -334,6 +387,7 @@ La suite actual cubre:
 - Sesión firmada y cuenta monousuario.
 - Perfil y mensajes Gmail simulados.
 - Cursor incremental y recuperación tras fallos parciales.
+- Lease de ingestión entre procesos, caducidad y recuperación tras caída.
 - Clasificación heurística y reglas configurables.
 - Gestión web de fuentes de newsletters.
 - Árboles MIME, adjuntos textuales y límites de tamaño.

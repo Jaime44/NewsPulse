@@ -46,6 +46,7 @@ from app.backend.services.oauth_credentials import (
     ensure_valid_credentials,
 )
 from app.backend.services.gmail_ingestion import (
+    GmailIngestionAlreadyRunningError,
     GmailIngestionError,
 )
 from app.backend.services.ingestion_factory import (
@@ -110,7 +111,13 @@ logger.debug(
 )
 
 try:
-    database = Database(settings.database_path)
+    database = Database(
+        settings.database_path,
+        busy_timeout_ms=(
+            settings.sqlite_busy_timeout_ms
+        ),
+        logger=logger,
+    )
 
     oauth_store = OAuthCredentialStore(
         database=database,
@@ -1049,6 +1056,9 @@ def run_gmail_ingestion() -> ResponseReturnValue:
                 retention_days=(
                     settings.retention_days
                 ),
+                ingestion_lease_seconds=(
+                    settings.ingestion_lease_seconds
+                ),
             )
         )
 
@@ -1136,6 +1146,16 @@ def run_gmail_ingestion() -> ResponseReturnValue:
                 )
             }
         ), 503
+
+    except GmailIngestionAlreadyRunningError:
+        return jsonify(
+            {
+                "error": (
+                    "An ingestion scan is "
+                    "already running"
+                )
+            }
+        ), 409
 
     except GmailIngestionError as exc:
         if is_error_logged(exc):

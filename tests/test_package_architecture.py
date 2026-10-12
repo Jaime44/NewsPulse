@@ -32,6 +32,14 @@ REQUIRED_LOG_IGNORE_PATTERNS = frozenset(
         "logs/*.log.lock",
     }
 )
+REQUIRED_DATABASE_BACKUP_IGNORE_PATTERNS = (
+    frozenset(
+        {
+            "data/*.db.bak*",
+            "data/backups/",
+        }
+    )
+)
 
 
 class PackageArchitectureTests(unittest.TestCase):
@@ -84,6 +92,25 @@ class PackageArchitectureTests(unittest.TestCase):
 
         self.assertTrue(
             REQUIRED_LOG_IGNORE_PATTERNS
+            <= ignore_patterns
+        )
+
+    def test_database_backups_are_ignored(self) -> None:
+        """Local SQLite backups containing private data must stay untracked."""
+
+        ignore_patterns = {
+            line.strip()
+            for line in (
+                PROJECT_ROOT / ".gitignore"
+            ).read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+            and not line.lstrip().startswith("#")
+        }
+
+        self.assertTrue(
+            REQUIRED_DATABASE_BACKUP_IGNORE_PATTERNS
             <= ignore_patterns
         )
 

@@ -80,6 +80,8 @@ class LoggingConfigurationTests(unittest.TestCase):
                     "TOKEN_ENCRYPTION_KEY_PATH="
                     f"{self.encryption_key}",
                     f"DATABASE_PATH={self.directory / 'test.db'}",
+                    "SQLITE_BUSY_TIMEOUT_MS=1234",
+                    "INGESTION_LEASE_SECONDS=321",
                     "RETENTION_DAYS=30",
                     f"LOG_DIRECTORY={self.directory / 'logs'}",
                     "LOG_MAX_BYTES=4096",
@@ -106,6 +108,14 @@ class LoggingConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.log_level, "DEBUG")
         self.assertEqual(settings.log_max_bytes, 4096)
         self.assertEqual(settings.log_backup_count, 7)
+        self.assertEqual(
+            settings.sqlite_busy_timeout_ms,
+            1_234,
+        )
+        self.assertEqual(
+            settings.ingestion_lease_seconds,
+            321,
+        )
         self.assertEqual(
             settings.log_directory,
             (self.directory / "logs").resolve(),

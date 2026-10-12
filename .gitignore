@@ -22,6 +22,8 @@ data/*.db-shm
 data/*.db-wal
 data/*.sqlite
 data/*.sqlite3
+data/*.db.bak*
+data/backups/
 
 # Generated content
 data/processed_emails/

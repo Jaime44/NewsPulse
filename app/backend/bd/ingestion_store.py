@@ -1,8 +1,9 @@
-"""Persist incremental Gmail discovery, processing, and classification state.
+"""Persist incremental Gmail discovery, processing, and audit state.
 
 This module maps SQLite rows to immutable domain records and implements the
-single-account ingestion cursor, message lifecycle, and classifier-result
-storage used by :class:`~app.backend.services.gmail_ingestion.GmailIngestionService`.
+single-account ingestion cursor, durable run outcomes, message lifecycle, and
+classifier-result storage used by
+:class:`~app.backend.services.gmail_ingestion.GmailIngestionService`.
 """
 
 from __future__ import annotations
@@ -10,9 +11,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.backend.bd.db import Database
 from app.backend.bd.oauth_store import OAuthCredentialStore
@@ -20,6 +21,14 @@ from app.backend.bd.oauth_store import OAuthCredentialStore
 
 class IngestionStoreError(RuntimeError):
     """Raised when ingestion state cannot be persisted."""
+
+
+class IngestionRunAlreadyActiveError(IngestionStoreError):
+    """Raised when another process owns the current ingestion lease."""
+
+
+class IngestionLeaseLostError(IngestionStoreError):
+    """Raised when a run no longer owns a valid ingestion lease."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +40,31 @@ class IngestionState:
     last_successful_scan_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IngestionRunCounters:
+    """Hold non-sensitive counters recorded for one ingestion execution.
+
+    Attributes:
+        listed_count: Gmail references returned by the complete listing.
+        discovered_count: Previously unseen messages registered by the run.
+        already_known_count: References already represented in storage.
+        ignored_before_start_count: Old messages excluded by the start boundary.
+        newsletter_count: New classifications resolved as newsletters.
+        review_count: New classifications requiring review.
+        not_newsletter_count: New classifications rejected as newsletters.
+        purged_content_count: Expired retained-content rows removed before scan.
+    """
+
+    listed_count: int = 0
+    discovered_count: int = 0
+    already_known_count: int = 0
+    ignored_before_start_count: int = 0
+    newsletter_count: int = 0
+    review_count: int = 0
+    not_newsletter_count: int = 0
+    purged_content_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +103,17 @@ CLASSIFICATION_VERDICTS = frozenset(
     }
 )
 
+INGESTION_COUNTER_FIELDS = (
+    "listed_count",
+    "discovered_count",
+    "already_known_count",
+    "ignored_before_start_count",
+    "newsletter_count",
+    "review_count",
+    "not_newsletter_count",
+    "purged_content_count",
+)
+
 def _as_utc(value: datetime) -> datetime:
     """Validate and normalize an aware timestamp to UTC.
 
@@ -82,12 +127,22 @@ def _as_utc(value: datetime) -> datetime:
         IngestionStoreError: If ``value`` has no timezone information.
     """
 
-    if value.tzinfo is None or value.utcoffset() is None:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
         raise IngestionStoreError(
             "Ingestion timestamps must include a timezone"
         )
 
     return value.astimezone(timezone.utc)
+
+
+def _utc_now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
+
+    return datetime.now(timezone.utc)
 
 
 def _from_iso(value: str) -> datetime:
@@ -300,14 +355,120 @@ def _normalize_classification_reasons(
 
     return tuple(normalized_reasons)
 
-class IngestionStore:
-    """Persist single-account Gmail ingestion state and message transitions.
 
-    The store owns the durable scan cursor, idempotent message registration,
-    processing statuses, and explainable classification records.
+def _validated_run_id(
+    run_id: int,
+) -> int:
+    """Validate one internal ingestion-run identifier.
+
+    Args:
+        run_id: Candidate primary key returned by :meth:`start_scan_run`.
+
+    Returns:
+        The validated positive integer identifier.
+
+    Raises:
+        IngestionStoreError: If the identifier is not a positive integer.
+    """
+
+    if (
+        isinstance(run_id, bool)
+        or not isinstance(run_id, int)
+        or run_id <= 0
+    ):
+        raise IngestionStoreError(
+            "run_id must be a positive integer"
+        )
+
+    return run_id
+
+
+def _normalized_error_code(
+    error_code: str,
+) -> str:
+    """Validate a bounded non-sensitive persistence error code.
+
+    Args:
+        error_code: Candidate code that must not contain exception details.
+
+    Returns:
+        The stripped code of at most 100 characters.
+
+    Raises:
+        IngestionStoreError: If the code is empty, not text, or too long.
+    """
+
+    if (
+        not isinstance(error_code, str)
+        or not error_code.strip()
+    ):
+        raise IngestionStoreError(
+            "error_code is required"
+        )
+
+    normalized_error_code = error_code.strip()
+
+    if len(normalized_error_code) > 100:
+        raise IngestionStoreError(
+            "error_code must not exceed "
+            "100 characters"
+        )
+
+    return normalized_error_code
+
+
+def _validated_run_counters(
+    counters: IngestionRunCounters,
+) -> tuple[int, ...]:
+    """Validate and flatten one scan-counter collection for SQLite.
+
+    Args:
+        counters: Structured scan counters supplied by the ingestion service.
+
+    Returns:
+        Counter values in :data:`INGESTION_COUNTER_FIELDS` order.
+
+    Raises:
+        IngestionStoreError: If the value or any counter is invalid.
+    """
+
+    if not isinstance(
+        counters,
+        IngestionRunCounters,
+    ):
+        raise IngestionStoreError(
+            "counters must be IngestionRunCounters"
+        )
+
+    values = tuple(
+        getattr(counters, field_name)
+        for field_name in INGESTION_COUNTER_FIELDS
+    )
+
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        for value in values
+    ):
+        raise IngestionStoreError(
+            "ingestion counters must be "
+            "non-negative integers"
+        )
+
+    return values
+
+class IngestionStore:
+    """Persist Gmail ingestion state, run outcomes, and message transitions.
+
+    The store owns the durable scan cursor and run completion transaction,
+    idempotent message registration, processing statuses, and explainable
+    classification records. Schema triggers preserve message histories.
 
     Attributes:
         database: SQLite connection and schema factory.
+        lease_seconds: Lifetime granted by each successful heartbeat.
+        clock: Operational clock used only for lease ownership.
     """
 
     ACCOUNT_ID = OAuthCredentialStore.ACCOUNT_ID
@@ -315,15 +476,52 @@ class IngestionStore:
     def __init__(
         self,
         database: Database,
+        *,
+        lease_seconds: int = 900,
+        clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         """Initialize the schema used by the ingestion repository.
 
         Args:
             database: Configured SQLite database factory.
+            lease_seconds: Positive lifetime assigned to each lease heartbeat.
+            clock: Callable supplying the operational lease time in UTC.
+
+        Raises:
+            ValueError: If ``lease_seconds`` is not a positive integer.
         """
 
+        if (
+            isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, int)
+            or lease_seconds <= 0
+        ):
+            raise ValueError(
+                "lease_seconds must be a positive integer"
+            )
+
         self.database = database
+        self.lease_seconds = lease_seconds
+        self.clock = clock
         self.database.initialize()
+
+    def _lease_window(self) -> tuple[datetime, datetime]:
+        """Return the current lease heartbeat and exclusive expiry.
+
+        Returns:
+            A pair containing the normalized current time and lease expiry.
+
+        Raises:
+            IngestionStoreError: If the configured clock returns a naive value.
+        """
+
+        heartbeat_at = _as_utc(self.clock())
+        return (
+            heartbeat_at,
+            heartbeat_at + timedelta(
+                seconds=self.lease_seconds
+            ),
+        )
 
     def load_state(self) -> IngestionState | None:
         """Load the ingestion state for the configured account.
@@ -351,6 +549,464 @@ class IngestionStore:
             return None
 
         return _state_from_row(row)
+
+    def start_scan_run(
+        self,
+        *,
+        started_at: datetime | None = None,
+    ) -> int:
+        """Create the durable running record for one ingestion attempt.
+
+        Args:
+            started_at: Optional timezone-aware scan-start timestamp.
+
+        Returns:
+            The generated internal ingestion-run identifier.
+
+        Raises:
+            IngestionStoreError: If the timestamp is invalid, no authenticated
+                account exists, or SQLite does not create the run.
+        """
+
+        heartbeat_at, lease_expires_at = (
+            self._lease_window()
+        )
+        start_time = _as_utc(
+            started_at or heartbeat_at
+        )
+        recovered_count = 0
+
+        try:
+            with self.database.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                recovery_cursor = connection.execute(
+                    """
+                    UPDATE ingestion_runs
+                    SET status = 'failed',
+                        finished_at = CASE
+                            WHEN julianday(started_at) > julianday(?)
+                                THEN started_at
+                            ELSE ?
+                        END,
+                        cursor_after = NULL,
+                        error_code = 'lease_expired',
+                        lease_heartbeat_at = NULL,
+                        lease_expires_at = NULL
+                    WHERE account_id = ?
+                      AND status = 'running'
+                      AND julianday(lease_expires_at) <= julianday(?)
+                    """,
+                    (
+                        heartbeat_at.isoformat(),
+                        heartbeat_at.isoformat(),
+                        self.ACCOUNT_ID,
+                        heartbeat_at.isoformat(),
+                    ),
+                )
+                recovered_count = recovery_cursor.rowcount
+
+                active_run = connection.execute(
+                    """
+                    SELECT 1
+                    FROM ingestion_runs
+                    WHERE account_id = ?
+                      AND status = 'running'
+                    LIMIT 1
+                    """,
+                    (self.ACCOUNT_ID,),
+                ).fetchone()
+
+                if active_run is not None:
+                    raise IngestionRunAlreadyActiveError(
+                        "Another ingestion run owns the active lease"
+                    )
+
+                cursor = connection.execute(
+                    """
+                    INSERT INTO ingestion_runs (
+                        account_id,
+                        status,
+                        started_at,
+                        lease_heartbeat_at,
+                        lease_expires_at
+                    )
+                    VALUES (?, 'running', ?, ?, ?)
+                    """,
+                    (
+                        self.ACCOUNT_ID,
+                        start_time.isoformat(),
+                        heartbeat_at.isoformat(),
+                        lease_expires_at.isoformat(),
+                    ),
+                )
+                run_id = cursor.lastrowid
+        except IngestionRunAlreadyActiveError:
+            raise
+        except sqlite3.IntegrityError as exc:
+            raise IngestionStoreError(
+                "An authenticated account is required "
+                "before recording an ingestion run"
+            ) from exc
+        except sqlite3.OperationalError as exc:
+            raise IngestionStoreError(
+                "SQLite could not acquire the ingestion lease"
+            ) from exc
+
+        if (
+            isinstance(run_id, bool)
+            or not isinstance(run_id, int)
+            or run_id <= 0
+        ):
+            raise IngestionStoreError(
+                "The ingestion run could not be created"
+            )
+
+        if (
+            recovered_count > 0
+            and self.database.logger is not None
+        ):
+            self.database.logger.warning(
+                "Recovered expired ingestion lease: recovered_count=%d",
+                recovered_count,
+            )
+
+        return run_id
+
+    def renew_scan_run(
+        self,
+        run_id: int,
+    ) -> None:
+        """Extend the lease held by one active ingestion run.
+
+        Args:
+            run_id: Running ingestion record whose lease will be renewed.
+
+        Raises:
+            IngestionLeaseLostError: If the run is missing, terminal, expired,
+                or has already been superseded by another process.
+            IngestionStoreError: If the identifier or clock is invalid.
+        """
+
+        normalized_run_id = _validated_run_id(run_id)
+        heartbeat_at, lease_expires_at = self._lease_window()
+
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE ingestion_runs
+                SET lease_heartbeat_at = ?,
+                    lease_expires_at = ?
+                WHERE id = ?
+                  AND account_id = ?
+                  AND status = 'running'
+                  AND julianday(lease_expires_at) > julianday(?)
+                """,
+                (
+                    heartbeat_at.isoformat(),
+                    lease_expires_at.isoformat(),
+                    normalized_run_id,
+                    self.ACCOUNT_ID,
+                    heartbeat_at.isoformat(),
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise IngestionLeaseLostError(
+                    "The ingestion lease is no longer active"
+                )
+
+    def complete_scan_run(
+        self,
+        run_id: int,
+        *,
+        finished_at: datetime,
+        cursor_before: datetime,
+        cursor_after: datetime,
+        counters: IngestionRunCounters,
+    ) -> IngestionState:
+        """Finish a run and advance its ingestion cursor atomically.
+
+        Args:
+            run_id: Running ingestion record to complete.
+            finished_at: Time at which the complete scan finished.
+            cursor_before: Durable cursor from which discovery started.
+            cursor_after: New cursor recorded after complete processing.
+            counters: Non-sensitive outcome counters for the run.
+
+        Returns:
+            The ingestion state containing the advanced cursor.
+
+        Raises:
+            IngestionStoreError: If inputs are invalid, the cursor would move
+                backwards, state is missing, or the run is no longer running.
+
+        Notes:
+            Cursor advancement and the terminal ``succeeded`` run update share
+            one transaction so neither can be committed independently.
+        """
+
+        normalized_run_id = _validated_run_id(
+            run_id
+        )
+        finish_time = _as_utc(finished_at)
+        previous_cursor = _as_utc(
+            cursor_before
+        )
+        next_cursor = _as_utc(cursor_after)
+        counter_values = _validated_run_counters(
+            counters
+        )
+        lease_checked_at, _ = self._lease_window()
+
+        with self.database.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT started_at, status, lease_expires_at
+                FROM ingestion_runs
+                WHERE id = ?
+                  AND account_id = ?
+                """,
+                (
+                    normalized_run_id,
+                    self.ACCOUNT_ID,
+                ),
+            ).fetchone()
+
+            if (
+                run_row is None
+                or run_row["status"] != "running"
+                or run_row["lease_expires_at"] is None
+                or _from_iso(run_row["lease_expires_at"])
+                    <= lease_checked_at
+            ):
+                raise IngestionLeaseLostError(
+                    "The ingestion lease is no longer active"
+                )
+
+            run_started_at = _from_iso(
+                run_row["started_at"]
+            )
+
+            if finish_time < run_started_at:
+                raise IngestionStoreError(
+                    "An ingestion run cannot finish "
+                    "before it starts"
+                )
+
+            row = connection.execute(
+                """
+                SELECT
+                    account_id,
+                    started_at,
+                    last_successful_scan_at,
+                    created_at,
+                    updated_at
+                FROM ingestion_state
+                WHERE account_id = ?
+                """,
+                (self.ACCOUNT_ID,),
+            ).fetchone()
+
+            if row is None:
+                raise IngestionStoreError(
+                    "Ingestion state has not been initialized"
+                )
+
+            current_state = _state_from_row(row)
+
+            if previous_cursor != (
+                current_state.last_successful_scan_at
+                or current_state.started_at
+            ):
+                raise IngestionStoreError(
+                    "The ingestion cursor changed during the scan"
+                )
+
+            if next_cursor < current_state.started_at:
+                raise IngestionStoreError(
+                    "A scan cannot finish before ingestion starts"
+                )
+
+            if next_cursor < previous_cursor:
+                raise IngestionStoreError(
+                    "The ingestion cursor cannot move backwards"
+                )
+
+            connection.execute(
+                """
+                UPDATE ingestion_state
+                SET last_successful_scan_at = ?,
+                    updated_at = ?
+                WHERE account_id = ?
+                """,
+                (
+                    next_cursor.isoformat(),
+                    finish_time.isoformat(),
+                    self.ACCOUNT_ID,
+                ),
+            )
+
+            run_cursor = connection.execute(
+                """
+                UPDATE ingestion_runs
+                SET status = 'succeeded',
+                    finished_at = ?,
+                    cursor_before = ?,
+                    cursor_after = ?,
+                    listed_count = ?,
+                    discovered_count = ?,
+                    already_known_count = ?,
+                    ignored_before_start_count = ?,
+                    newsletter_count = ?,
+                    review_count = ?,
+                    not_newsletter_count = ?,
+                    purged_content_count = ?,
+                    error_code = NULL,
+                    lease_heartbeat_at = NULL,
+                    lease_expires_at = NULL
+                WHERE id = ?
+                  AND account_id = ?
+                  AND status = 'running'
+                  AND julianday(lease_expires_at) > julianday(?)
+                """,
+                (
+                    finish_time.isoformat(),
+                    previous_cursor.isoformat(),
+                    next_cursor.isoformat(),
+                    *counter_values,
+                    normalized_run_id,
+                    self.ACCOUNT_ID,
+                    lease_checked_at.isoformat(),
+                ),
+            )
+
+            if run_cursor.rowcount != 1:
+                raise IngestionLeaseLostError(
+                    "The ingestion lease is no longer active"
+                )
+
+        return IngestionState(
+            account_id=current_state.account_id,
+            started_at=current_state.started_at,
+            last_successful_scan_at=next_cursor,
+            created_at=current_state.created_at,
+            updated_at=finish_time,
+        )
+
+    def fail_scan_run(
+        self,
+        run_id: int,
+        *,
+        failed_at: datetime,
+        error_code: str,
+        counters: IngestionRunCounters,
+        cursor_before: datetime | None = None,
+    ) -> None:
+        """Finalize one running scan as failed without moving the cursor.
+
+        Args:
+            run_id: Running ingestion record to fail.
+            failed_at: Time at which the scan stopped.
+            error_code: Bounded non-sensitive failure category.
+            counters: Partial non-sensitive counters observed before failure.
+            cursor_before: Optional cursor loaded before the failed operation.
+
+        Raises:
+            IngestionStoreError: If inputs are invalid or the run is not active.
+        """
+
+        normalized_run_id = _validated_run_id(
+            run_id
+        )
+        failure_time = _as_utc(failed_at)
+        normalized_error_code = (
+            _normalized_error_code(error_code)
+        )
+        counter_values = _validated_run_counters(
+            counters
+        )
+        previous_cursor = (
+            _as_utc(cursor_before)
+            if cursor_before is not None
+            else None
+        )
+        lease_checked_at, _ = self._lease_window()
+
+        with self.database.connect() as connection:
+            run_row = connection.execute(
+                """
+                SELECT started_at, status, lease_expires_at
+                FROM ingestion_runs
+                WHERE id = ?
+                  AND account_id = ?
+                """,
+                (
+                    normalized_run_id,
+                    self.ACCOUNT_ID,
+                ),
+            ).fetchone()
+
+            if (
+                run_row is None
+                or run_row["status"] != "running"
+                or run_row["lease_expires_at"] is None
+                or _from_iso(run_row["lease_expires_at"])
+                    <= lease_checked_at
+            ):
+                raise IngestionLeaseLostError(
+                    "The ingestion lease is no longer active"
+                )
+
+            if failure_time < _from_iso(
+                run_row["started_at"]
+            ):
+                raise IngestionStoreError(
+                    "An ingestion run cannot finish "
+                    "before it starts"
+                )
+
+            cursor = connection.execute(
+                """
+                UPDATE ingestion_runs
+                SET status = 'failed',
+                    finished_at = ?,
+                    cursor_before = ?,
+                    cursor_after = NULL,
+                    listed_count = ?,
+                    discovered_count = ?,
+                    already_known_count = ?,
+                    ignored_before_start_count = ?,
+                    newsletter_count = ?,
+                    review_count = ?,
+                    not_newsletter_count = ?,
+                    purged_content_count = ?,
+                    error_code = ?,
+                    lease_heartbeat_at = NULL,
+                    lease_expires_at = NULL
+                WHERE id = ?
+                  AND account_id = ?
+                  AND status = 'running'
+                  AND julianday(lease_expires_at) > julianday(?)
+                """,
+                (
+                    failure_time.isoformat(),
+                    (
+                        previous_cursor.isoformat()
+                        if previous_cursor is not None
+                        else None
+                    ),
+                    *counter_values,
+                    normalized_error_code,
+                    normalized_run_id,
+                    self.ACCOUNT_ID,
+                    lease_checked_at.isoformat(),
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise IngestionLeaseLostError(
+                    "The ingestion lease is no longer active"
+                )
 
     def get_or_create_state(
         self,
@@ -840,23 +1496,11 @@ class IngestionStore:
                 the message is not registered.
         """
 
-        if (
-            not isinstance(error_code, str)
-            or not error_code.strip()
-        ):
-            raise IngestionStoreError(
-                "error_code is required"
-            )
-
         normalized_error_code = (
-            error_code.strip()
-        )
-
-        if len(normalized_error_code) > 100:
-            raise IngestionStoreError(
-                "error_code must not exceed "
-                "100 characters"
+            _normalized_error_code(
+                error_code
             )
+        )
 
         failure_time = _as_utc(
             failed_at
@@ -899,6 +1543,11 @@ class IngestionStore:
         Raises:
             IngestionStoreError: If data is invalid, the message is unknown, or
                 the saved record cannot be loaded.
+
+        Notes:
+            Reclassifying a message as ``review`` or ``not_newsletter`` removes
+            any previously retained body in the same transaction so content is
+            never associated with a non-newsletter verdict.
         """
 
         message_id = _required_identifier(
@@ -991,6 +1640,15 @@ class IngestionStore:
                 )
 
             message_row_id = message_row["id"]
+
+            if normalized_verdict != "newsletter":
+                connection.execute(
+                    """
+                    DELETE FROM message_contents
+                    WHERE gmail_message_row_id = ?
+                    """,
+                    (message_row_id,),
+                )
 
             connection.execute(
                 """

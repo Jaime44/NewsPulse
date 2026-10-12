@@ -2,7 +2,8 @@
 
 The ingestion service derives a Gmail ``after:`` query from the durable cursor,
 registers unseen messages, resolves newsletter classifications, processes
-content for newsletters, and advances the cursor only after a complete scan.
+content for newsletters, records a safe operational outcome, and advances the
+cursor only after a complete scan.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from datetime import datetime, timezone
 from time import perf_counter
 
 from app.backend.bd.ingestion_store import (
+    IngestionRunAlreadyActiveError,
+    IngestionRunCounters,
     IngestionStore,
     IngestionStoreError,
 )
@@ -41,6 +44,10 @@ from app.tools.logger import (
 
 class GmailIngestionError(RuntimeError):
     """Raised when an incremental Gmail scan fails."""
+
+
+class GmailIngestionAlreadyRunningError(GmailIngestionError):
+    """Raised when another process owns the durable ingestion lease."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +263,11 @@ class GmailIngestionService:
             GmailIngestionError: If any discovery, validation, persistence,
                 classification, or content-processing stage fails. The durable
                 cursor is not advanced on failure.
+
+        Notes:
+            Each authenticated attempt creates an ``ingestion_runs`` record.
+            Successful finalization and cursor advancement are atomic; failed
+            finalization records only bounded counters and a safe error code.
         """
 
         operation_started_at = perf_counter()
@@ -267,6 +279,91 @@ class GmailIngestionService:
             if label_ids is not None
             else 0
         )
+        scan_run_id: int | None = None
+        cursor_before: datetime | None = None
+        purged_count = 0
+        listed_count = 0
+        discovered_count = 0
+        already_known_count = 0
+        ignored_before_start_count = 0
+        newsletter_count = 0
+        review_count = 0
+        not_newsletter_count = 0
+
+        def current_counters() -> IngestionRunCounters:
+            """Build the durable non-sensitive counters observed so far.
+
+            Returns:
+                A snapshot suitable for either successful or failed run
+                finalization.
+            """
+
+            return IngestionRunCounters(
+                listed_count=listed_count,
+                discovered_count=discovered_count,
+                already_known_count=(
+                    already_known_count
+                ),
+                ignored_before_start_count=(
+                    ignored_before_start_count
+                ),
+                newsletter_count=newsletter_count,
+                review_count=review_count,
+                not_newsletter_count=(
+                    not_newsletter_count
+                ),
+                purged_content_count=(
+                    purged_count
+                ),
+            )
+
+        def record_failed_run(
+            error_code: str,
+        ) -> None:
+            """Best-effort finalize the active run without masking failure.
+
+            Args:
+                error_code: Non-sensitive category for the primary failure.
+
+            Notes:
+                A secondary history-write failure is logged with its exception
+                type only and never replaces the scan exception owned by the
+                caller's active error handler.
+            """
+
+            if scan_run_id is None:
+                return
+
+            try:
+                failure_time = _as_utc(
+                    self.clock()
+                )
+                self.store.fail_scan_run(
+                    scan_run_id,
+                    failed_at=failure_time,
+                    error_code=error_code,
+                    counters=current_counters(),
+                    cursor_before=cursor_before,
+                )
+                self.logger.debug(
+                    "Ingestion run history finalized: "
+                    "run_id=%d status=failed error_code=%s",
+                    scan_run_id,
+                    error_code,
+                )
+            except Exception as history_error:
+                self.logger.warning(
+                    "Ingestion run history finalization failed: "
+                    "failure_type=%s",
+                    type(history_error).__name__,
+                )
+
+        def renew_active_lease() -> None:
+            """Refresh the current run lease around potentially slow work."""
+
+            if scan_run_id is not None:
+                self.store.renew_scan_run(scan_run_id)
+
         self.logger.info(
             "Gmail ingestion scan started: total_limit=%d page_size=%d "
             "label_count=%d",
@@ -276,6 +373,13 @@ class GmailIngestionService:
         )
 
         try:
+            scan_run_id = self.store.start_scan_run(
+                started_at=scan_started_at
+            )
+            self.logger.debug(
+                "Ingestion run lease acquired: run_id=%d",
+                scan_run_id,
+            )
             purged_count = (
                 self.content_processing_service
                 .purge_expired(
@@ -286,6 +390,7 @@ class GmailIngestionService:
                 "Expired content purge completed: deleted_count=%d",
                 purged_count,
             )
+            renew_active_lease()
 
             state = self.store.get_or_create_state(
                 started_at=scan_started_at
@@ -321,19 +426,15 @@ class GmailIngestionService:
                 "Gmail message discovery completed: listed_count=%d",
                 len(references),
             )
+            listed_count = len(references)
+            renew_active_lease()
 
             application_start_ms = int(
                 state.started_at.timestamp() * 1_000
             )
 
-            discovered_count = 0
-            already_known_count = 0
-            ignored_before_start_count = 0
-            newsletter_count = 0
-            review_count = 0
-            not_newsletter_count = 0
-
             for reference in references:
+                renew_active_lease()
                 stored_classification = (
                     self.store
                     .load_message_classification(
@@ -488,14 +589,6 @@ class GmailIngestionService:
                 else:
                     not_newsletter_count += 1
 
-            self.store.mark_scan_successful(
-                completed_at=scan_started_at
-            )
-            self.logger.debug(
-                "Ingestion cursor advanced: cursor_after=%s",
-                scan_started_at.isoformat(),
-            )
-
             result = IngestionScanResult(
                 scan_started_at=scan_started_at,
                 cursor_before=cursor_before,
@@ -515,6 +608,23 @@ class GmailIngestionService:
                     not_newsletter_count
                 ),
             )
+            renew_active_lease()
+            scan_finished_at = _as_utc(
+                self.clock()
+            )
+            self.store.complete_scan_run(
+                scan_run_id,
+                finished_at=scan_finished_at,
+                cursor_before=cursor_before,
+                cursor_after=scan_started_at,
+                counters=current_counters(),
+            )
+            self.logger.debug(
+                "Ingestion cursor and run finalized: "
+                "cursor_after=%s run_id=%d",
+                scan_started_at.isoformat(),
+                scan_run_id,
+            )
             self.logger.info(
                 "Gmail ingestion scan completed: listed=%d discovered=%d "
                 "already_known=%d ignored_before_start=%d newsletter=%d "
@@ -529,7 +639,18 @@ class GmailIngestionService:
                 (perf_counter() - operation_started_at) * 1_000,
             )
             return result
+        except IngestionRunAlreadyActiveError as exc:
+            self.logger.warning(
+                "Gmail ingestion scan skipped because another process "
+                "owns the active lease"
+            )
+            raise GmailIngestionAlreadyRunningError(
+                "An ingestion scan is already running"
+            ) from exc
         except GmailIngestionError as exc:
+            record_failed_run(
+                "ingestion_validation_failed"
+            )
             self.logger.debug(
                 "Gmail ingestion scan aborted: duration_ms=%.2f",
                 (perf_counter() - operation_started_at) * 1_000,
@@ -541,6 +662,9 @@ class GmailIngestionService:
             mark_error_logged(exc)
             raise
         except GmailListingLimitReached as exc:
+            record_failed_run(
+                "result_limit_reached"
+            )
             self.logger.debug(
                 "Gmail ingestion scan aborted: duration_ms=%.2f",
                 (perf_counter() - operation_started_at) * 1_000,
@@ -559,6 +683,19 @@ class GmailIngestionService:
             IngestionStoreError,
             MessageContentProcessingError,
         ) as exc:
+            if isinstance(exc, GmailClientError):
+                error_code = "gmail_client_failed"
+            elif isinstance(
+                exc,
+                IngestionStoreError,
+            ):
+                error_code = "persistence_failed"
+            else:
+                error_code = (
+                    "content_processing_failed"
+                )
+
+            record_failed_run(error_code)
             self.logger.debug(
                 "Gmail ingestion scan aborted: duration_ms=%.2f",
                 (perf_counter() - operation_started_at) * 1_000,
@@ -579,6 +716,9 @@ class GmailIngestionService:
                 )
             ) from exc
         except Exception as exc:
+            record_failed_run(
+                "unexpected_failure"
+            )
             self.logger.debug(
                 "Gmail ingestion scan aborted: duration_ms=%.2f",
                 (perf_counter() - operation_started_at) * 1_000,

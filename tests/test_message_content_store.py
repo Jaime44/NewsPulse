@@ -110,7 +110,7 @@ class MessageContentStoreTests(
         )
 
         with self.database.connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO gmail_messages (
                     account_id,
@@ -139,6 +139,25 @@ class MessageContentStoreTests(
                     ),
                     1_757_721_600_000,
                     timestamp,
+                    timestamp,
+                ),
+            )
+
+            connection.execute(
+                """
+                INSERT INTO message_classifications (
+                    gmail_message_row_id,
+                    verdict,
+                    score,
+                    reasons_json,
+                    classifier_version,
+                    classified_at
+                )
+                VALUES (?, 'newsletter', 5, ?, 'rules-v1', ?)
+                """,
+                (
+                    cursor.lastrowid,
+                    '["configured_sender"]',
                     timestamp,
                 ),
             )
@@ -339,6 +358,38 @@ class MessageContentStoreTests(
             (
                 "The Gmail message has not "
                 "been registered"
+            ),
+        )
+
+    def test_non_newsletter_message_is_rejected(
+        self,
+    ) -> None:
+        """Verify content cannot be saved for a non-newsletter verdict."""
+
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE message_classifications
+                SET verdict = 'review'
+                """
+            )
+
+        with self.assertRaises(
+            MessageContentStoreError
+        ) as raised:
+            self.store.save_content(
+                "gmail-message-1",
+                text="Readable content",
+                links=(),
+                source_mime_type="text/plain",
+                extracted_at=EXTRACTED_AT,
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            (
+                "Content can only be stored for "
+                "a newsletter"
             ),
         )
 
@@ -570,7 +621,7 @@ class MessageContentStoreTests(
     def test_invalid_stored_links_are_rejected(
         self,
     ) -> None:
-        """Verify that invalid stored links are rejected."""
+        """Verify that repository loading rejects legacy corrupted links."""
 
         self.store.save_content(
             "gmail-message-1",
@@ -583,6 +634,12 @@ class MessageContentStoreTests(
         )
 
         with self.database.connect() as connection:
+            connection.execute(
+                """
+                DROP TRIGGER
+                    validate_message_contents_update
+                """
+            )
             connection.execute(
                 """
                 UPDATE message_contents

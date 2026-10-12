@@ -191,13 +191,22 @@ class GmailIngestionIntegrationTests(
             The configured ingestion service.
         """
 
+        content_processing_service = Mock()
+        (
+            content_processing_service
+            .purge_expired
+            .return_value
+        ) = 0
+
         service = GmailIngestionService(
             gmail_client=self.gmail_client,
             store=self.store,
             classification_service=(
                 self.classification_service
             ),
-            content_processing_service=Mock(),
+            content_processing_service=(
+                content_processing_service
+            ),
             clock=lambda: scan_time,
         )
         service.logger = Mock()
@@ -343,6 +352,57 @@ class GmailIngestionIntegrationTests(
             second_classification.verdict,
             "newsletter",
         )
+
+        with self.database.connect() as connection:
+            runs = tuple(
+                connection.execute(
+                    """
+                    SELECT
+                        status,
+                        cursor_before,
+                        cursor_after,
+                        listed_count,
+                        discovered_count,
+                        already_known_count,
+                        newsletter_count,
+                        error_code
+                    FROM ingestion_runs
+                    ORDER BY id
+                    """
+                )
+            )
+
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(runs[0]["status"], "failed")
+        self.assertEqual(
+            runs[0]["cursor_before"],
+            FIRST_SCAN_AT.isoformat(),
+        )
+        self.assertIsNone(runs[0]["cursor_after"])
+        self.assertEqual(runs[0]["listed_count"], 2)
+        self.assertEqual(runs[0]["discovered_count"], 1)
+        self.assertEqual(runs[0]["newsletter_count"], 1)
+        self.assertEqual(
+            runs[0]["error_code"],
+            "gmail_client_failed",
+        )
+        self.assertEqual(runs[1]["status"], "succeeded")
+        self.assertEqual(
+            runs[1]["cursor_before"],
+            FIRST_SCAN_AT.isoformat(),
+        )
+        self.assertEqual(
+            runs[1]["cursor_after"],
+            RETRY_SCAN_AT.isoformat(),
+        )
+        self.assertEqual(runs[1]["listed_count"], 2)
+        self.assertEqual(runs[1]["discovered_count"], 1)
+        self.assertEqual(
+            runs[1]["already_known_count"],
+            1,
+        )
+        self.assertEqual(runs[1]["newsletter_count"], 1)
+        self.assertIsNone(runs[1]["error_code"])
         (
             self.gmail_client
             .get_message_metadata

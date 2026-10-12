@@ -22,6 +22,8 @@ DEFAULT_LOG_DIRECTORY = PROJECT_ROOT / "logs"
 DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_LOG_BACKUP_COUNT = 5
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5_000
+DEFAULT_INGESTION_LEASE_SECONDS = 900
 SUPPORTED_LOG_LEVELS = frozenset(
     {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 )
@@ -220,7 +222,9 @@ class AppConfig:
         flask_secret_key_path: File containing the Flask signing key.
         token_encryption_key_path: File containing the Fernet key.
         database_path: SQLite database location.
+        sqlite_busy_timeout_ms: Maximum wait for a competing SQLite writer.
         retention_days: Lifetime of persisted readable message content.
+        ingestion_lease_seconds: Lifetime renewed by an active ingestion scan.
         log_directory: Directory containing active and archived log files.
         log_max_bytes: Active-file size that triggers log rotation.
         log_backup_count: Number of numbered archives retained per log.
@@ -242,6 +246,8 @@ class AppConfig:
 
     database_path: Path
     retention_days: int
+    sqlite_busy_timeout_ms: int = DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+    ingestion_lease_seconds: int = DEFAULT_INGESTION_LEASE_SECONDS
     log_directory: Path = DEFAULT_LOG_DIRECTORY
     log_max_bytes: int = DEFAULT_LOG_MAX_BYTES
     log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
@@ -331,6 +337,14 @@ class AppConfig:
             ),
             database_path=database_path,
             retention_days=_positive_int("RETENTION_DAYS", "30"),
+            sqlite_busy_timeout_ms=_positive_int(
+                "SQLITE_BUSY_TIMEOUT_MS",
+                str(DEFAULT_SQLITE_BUSY_TIMEOUT_MS),
+            ),
+            ingestion_lease_seconds=_positive_int(
+                "INGESTION_LEASE_SECONDS",
+                str(DEFAULT_INGESTION_LEASE_SECONDS),
+            ),
             log_directory=_optional_path(
                 "LOG_DIRECTORY",
                 DEFAULT_LOG_DIRECTORY,

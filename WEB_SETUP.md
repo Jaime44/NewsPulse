@@ -112,6 +112,8 @@ FLASK_SECRET_KEY_PATH=secrets/flask_secret.key
 TOKEN_ENCRYPTION_KEY_PATH=secrets/token_encryption.key
 
 DATABASE_PATH=data/newspulse.db
+SQLITE_BUSY_TIMEOUT_MS=5000
+INGESTION_LEASE_SECONDS=900
 ```
 
 No añadas valores reales a `.env.example`.
@@ -186,6 +188,70 @@ data/newspulse.db
 ```
 
 La base de datos no debe subirse a Git.
+
+El directorio padre configurado en `DATABASE_PATH` debe estar dedicado a News
+Pulse. En sistemas POSIX, la aplicación lo restringe automáticamente a `0700` y
+restringe el archivo SQLite a `0600`. No sitúes la base directamente dentro de
+un directorio compartido, ya que sus permisos serán tratados como privados.
+
+Las credenciales OAuth se cifran con Fernet. El texto extraído y los
+identificadores almacenados en otras tablas no tienen cifrado individual, por
+lo que el equipo o volumen que contiene `data/` debe utilizar cifrado en reposo.
+
+### Versionado del esquema
+
+News Pulse registra la versión de SQLite mediante `PRAGMA user_version`. El
+esquema actual corresponde a la versión `4`.
+
+Durante el arranque, las migraciones pendientes:
+
+1. Adquieren un bloqueo de escritura de SQLite.
+2. Vuelven a consultar la versión después de obtener el bloqueo.
+3. Se ejecutan en orden dentro de una única transacción.
+4. Validan las columnas, índices, triggers, claves foráneas e invariantes de
+   los datos resultantes.
+5. Hacen rollback completo si alguna comprobación falla.
+
+La versión 2 exige fechas ISO-8601 UTC canónicas, arrays JSON de cadenas,
+estados de procesamiento coherentes y contenido asociado exclusivamente a una
+clasificación `newsletter`. La purga de retención puede eliminar el contenido
+sin borrar el estado `processed`, por lo que esa combinación sigue siendo
+válida. Una base heredada con `user_version = 0` solo se convierte a la versión
+actual cuando su estructura y sus filas son compatibles. Una base creada por
+una versión futura de News Pulse se rechaza sin modificarla.
+
+La versión 3 añade tres historiales:
+
+- `ingestion_runs`, con el resultado y los contadores no sensibles de cada
+  escaneo;
+- `message_status_history`, con las transiciones de procesamiento;
+- `message_classification_history`, con las decisiones y versiones del
+  clasificador.
+
+Las tablas de historial no almacenan copias del texto ni de los enlaces del
+correo. Al eliminar la cuenta o el mensaje propietario, sus historiales se
+eliminan mediante claves foráneas. El avance del cursor y el cierre
+`succeeded` de una ejecución se realizan atómicamente.
+
+La versión 4 configura SQLite en modo WAL y aplica
+`SQLITE_BUSY_TIMEOUT_MS` a cada conexión. También añade a `ingestion_runs` un
+lease exclusivo renovable cuya duración se configura con
+`INGESTION_LEASE_SECONDS`. Un índice parcial impide que dos procesos mantengan
+ejecuciones `running` para la misma cuenta. Si un proceso se detiene sin cerrar
+su ejecución, el siguiente intento espera a que el lease caduque, registra el
+intento abandonado como `failed` con el código seguro `lease_expired` y comienza
+una ejecución nueva sin mover el cursor anterior.
+
+El lease coordina procesos que comparten el mismo archivo SQLite en un único
+host. No debe utilizarse SQLite sobre un sistema de archivos de red ni como
+coordinación entre máquinas; ese despliegue requerirá una base de datos y un
+bloqueo distribuidos.
+
+Antes de actualizar a una versión que incluya nuevas migraciones, detén la
+aplicación y crea una copia privada de la base en almacenamiento cifrado. Las
+copias locales situadas bajo `data/backups/` o denominadas `*.db.bak*` están
+excluidas de Git, pero deben tener su propia política de retención y eliminación
+segura.
 
 El almacenamiento monousuario impide utilizar identificadores de cuenta
 arbitrarios. Si la sesión contiene un identificador no permitido, el
@@ -405,7 +471,8 @@ Antes de desplegar News Pulse será necesario:
 - Establecer `APP_ENV=production`.
 - Ejecutar la aplicación con un servidor WSGI.
 - Gestionar claves y secretos fuera del repositorio.
-- Restringir permisos sobre la base de datos.
+- Verificar que la base mantiene permisos `0600` y su directorio `0700` en
+  sistemas POSIX.
 - Definir copias de seguridad compatibles con la clave Fernet.
 - Enviar los archivos rotados a una plataforma de monitorización y alertas.
 - Definir una operación explícita para desconectar y revocar la cuenta.

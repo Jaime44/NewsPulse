@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 from app.backend.bd.ingestion_store import (
+    IngestionRunAlreadyActiveError,
+    IngestionRunCounters,
     IngestionState,
     IngestionStoreError,
 )
@@ -17,6 +19,7 @@ from app.backend.services.classifier import (
     NewsletterVerdict,
 )
 from app.backend.services.gmail_ingestion import (
+    GmailIngestionAlreadyRunningError,
     GmailIngestionError,
     GmailIngestionService,
     IngestionScanResult,
@@ -124,6 +127,12 @@ class GmailIngestionServiceTests(unittest.TestCase):
         self.store.get_or_create_state.return_value = (
             self.state
         )
+        self.store.start_scan_run.return_value = 17
+        (
+            self.content_processing_service
+            .purge_expired
+            .return_value
+        ) = 0
 
         self.service = GmailIngestionService(
             gmail_client=self.gmail_client,
@@ -137,6 +146,81 @@ class GmailIngestionServiceTests(unittest.TestCase):
             clock=lambda: SCAN_STARTED_AT,
         )
         self.service.logger = Mock()
+
+    def assert_run_completed(
+        self,
+        counters: IngestionRunCounters,
+        *,
+        cursor_before: datetime = APPLICATION_STARTED_AT,
+    ) -> None:
+        """Verify one scan run was started and atomically completed.
+
+        Args:
+            counters: Expected durable scan counters.
+            cursor_before: Cursor expected when the run began discovery.
+        """
+
+        self.store.start_scan_run.assert_called_once_with(
+            started_at=SCAN_STARTED_AT
+        )
+        self.store.complete_scan_run.assert_called_once_with(
+            17,
+            finished_at=SCAN_STARTED_AT,
+            cursor_before=cursor_before,
+            cursor_after=SCAN_STARTED_AT,
+            counters=counters,
+        )
+        self.store.fail_scan_run.assert_not_called()
+
+    def test_active_database_lease_rejects_scan(
+        self,
+    ) -> None:
+        """Verify a lease conflict remains a distinct concurrency outcome."""
+
+        self.store.start_scan_run.side_effect = (
+            IngestionRunAlreadyActiveError(
+                "internal lease detail"
+            )
+        )
+
+        with self.assertRaises(
+            GmailIngestionAlreadyRunningError
+        ):
+            self.service.scan()
+
+        self.store.fail_scan_run.assert_not_called()
+        self.gmail_client.list_message_references.assert_not_called()
+        self.service.logger.warning.assert_called_once()
+
+    def test_run_finish_uses_completion_time_but_cursor_uses_start(
+        self,
+    ) -> None:
+        """Verify audit completion time does not widen the Gmail cursor."""
+
+        finished_at = SCAN_STARTED_AT + timedelta(
+            minutes=2
+        )
+        self.service.clock = Mock(
+            side_effect=(
+                SCAN_STARTED_AT,
+                finished_at,
+            )
+        )
+        self.gmail_client.list_message_references.return_value = []
+
+        result = self.service.scan()
+
+        self.assertEqual(
+            result.cursor_after,
+            SCAN_STARTED_AT,
+        )
+        self.store.complete_scan_run.assert_called_once_with(
+            17,
+            finished_at=finished_at,
+            cursor_before=APPLICATION_STARTED_AT,
+            cursor_after=SCAN_STARTED_AT,
+            counters=IngestionRunCounters(),
+        )
 
     def test_successful_scan_registers_new_message(
         self,
@@ -245,8 +329,12 @@ class GmailIngestionServiceTests(unittest.TestCase):
             )
         )
 
-        self.store.mark_scan_successful.assert_called_once_with(
-            completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                discovered_count=1,
+                newsletter_count=1,
+            )
         )
 
     def test_known_message_skips_metadata_request(
@@ -282,8 +370,11 @@ class GmailIngestionServiceTests(unittest.TestCase):
             .assert_not_called()
         )
         self.store.register_message.assert_not_called()
-        self.store.mark_scan_successful.assert_called_once_with(
-            completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                already_known_count=1,
+            )
         )
 
     def test_message_before_application_start_is_ignored(
@@ -330,8 +421,11 @@ class GmailIngestionServiceTests(unittest.TestCase):
         )
 
         self.store.register_message.assert_not_called()
-        self.store.mark_scan_successful.assert_called_once_with(
-            completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                ignored_before_start_count=1,
+            )
         )
 
     def test_existing_cursor_is_used_for_next_scan(
@@ -376,6 +470,10 @@ class GmailIngestionServiceTests(unittest.TestCase):
         self.assertEqual(
             result.gmail_query,
             expected_query,
+        )
+        self.assert_run_completed(
+            IngestionRunCounters(),
+            cursor_before=last_successful_scan,
         )
 
         (
@@ -461,8 +559,12 @@ class GmailIngestionServiceTests(unittest.TestCase):
             1,
         )
 
-        self.store.mark_scan_successful.assert_called_once_with(
-            completed_at=SCAN_STARTED_AT
+        self.assert_run_completed(
+            IngestionRunCounters(
+                listed_count=1,
+                already_known_count=1,
+                newsletter_count=1,
+            )
         )
 
     def test_inconsistent_metadata_does_not_advance_cursor(
@@ -497,7 +599,18 @@ class GmailIngestionServiceTests(unittest.TestCase):
         )
 
         self.store.register_message.assert_not_called()
-        self.store.mark_scan_successful.assert_not_called()
+        self.store.complete_scan_run.assert_not_called()
+        self.store.fail_scan_run.assert_called_once_with(
+            17,
+            failed_at=SCAN_STARTED_AT,
+            error_code=(
+                "ingestion_validation_failed"
+            ),
+            counters=IngestionRunCounters(
+                listed_count=1,
+            ),
+            cursor_before=APPLICATION_STARTED_AT,
+        )
 
         self.service.logger.error.assert_called_once_with(
             "Gmail ingestion scan failed: "
@@ -548,7 +661,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
             discovered_at=SCAN_STARTED_AT,
         )
 
-        self.store.mark_scan_successful.assert_not_called()
+        self.store.complete_scan_run.assert_not_called()
 
         logged_value = (
             self.service
@@ -594,7 +707,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
             "Gmail ingestion received an already logged failure: %s",
             "GmailClientError",
         )
-        self.store.mark_scan_successful.assert_not_called()
+        self.store.complete_scan_run.assert_not_called()
 
     def test_classification_failure_keeps_cursor_for_retry(
         self,
@@ -636,7 +749,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
         )
         (
             self.store
-            .mark_scan_successful
+            .complete_scan_run
             .assert_not_called()
         )
 
@@ -686,7 +799,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
             "Gmail ingestion scan failed",
         )
 
-        self.store.mark_scan_successful.assert_not_called()
+        self.store.complete_scan_run.assert_not_called()
 
         logged_value = (
             self.service
@@ -730,7 +843,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
             "Gmail ingestion scan failed",
         )
 
-        self.store.mark_scan_successful.assert_not_called()
+        self.store.complete_scan_run.assert_not_called()
 
         logged_value = (
             self.service
@@ -779,7 +892,7 @@ class GmailIngestionServiceTests(unittest.TestCase):
             .assert_not_called()
         )
         self.store.register_message.assert_not_called()
-        self.store.mark_scan_successful.assert_not_called()
+        self.store.complete_scan_run.assert_not_called()
 
         self.service.logger.error.assert_called_once_with(
             "Gmail ingestion scan failed: "

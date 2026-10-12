@@ -78,6 +78,7 @@ class IngestionFactoryTests(unittest.TestCase):
             gmail_service=self.gmail_service,
             database=self.database,
             retention_days=45,
+            ingestion_lease_seconds=123,
         )
 
         self.assertIsInstance(
@@ -146,6 +147,10 @@ class IngestionFactoryTests(unittest.TestCase):
         self.assertIs(
             service.store.database,
             self.database,
+        )
+        self.assertEqual(
+            service.store.lease_seconds,
+            123,
         )
         self.assertIs(
             (

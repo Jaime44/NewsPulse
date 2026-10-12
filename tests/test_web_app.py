@@ -1720,11 +1720,58 @@ class GmailRouteTests(unittest.TestCase):
             gmail_service=gmail_service,
             database=self.web_app.database,
             retention_days=30,
+            ingestion_lease_seconds=900,
         )
         ingestion_service.scan.assert_called_once_with(
             user_id="me",
             total_limit=500,
             page_size=100,
+        )
+
+    def test_ingestion_scan_rejects_cross_process_lease(
+        self,
+    ) -> None:
+        """Verify a database lease conflict is returned as HTTP 409."""
+
+        self.authenticate_session()
+        ingestion_service = Mock()
+        ingestion_service.scan.side_effect = (
+            self.web_app.GmailIngestionAlreadyRunningError(
+                "internal lease detail"
+            )
+        )
+
+        with (
+            patch.object(
+                self.web_app,
+                "get_authenticated_gmail_service",
+                return_value=Mock(),
+            ),
+            patch.object(
+                self.web_app,
+                "build_gmail_ingestion_service",
+                return_value=ingestion_service,
+            ),
+        ):
+            response = self.client.post(
+                "/api/ingestion/scan",
+                headers={
+                    "X-NewsPulse-Action": "scan"
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.get_json(),
+            {
+                "error": (
+                    "An ingestion scan is "
+                    "already running"
+                )
+            },
+        )
+        self.assertFalse(
+            self.web_app.ingestion_scan_lock.locked()
         )
 
     def test_ingestion_scan_rejects_concurrent_run(

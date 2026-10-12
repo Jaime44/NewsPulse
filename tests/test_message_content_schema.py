@@ -156,6 +156,37 @@ class MessageContentSchemaTests(unittest.TestCase):
             ),
         )
 
+    @staticmethod
+    def insert_newsletter_classification(
+        connection: sqlite3.Connection,
+        gmail_message_row_id: int,
+    ) -> None:
+        """Classify a fixture message before retaining its content.
+
+        Args:
+            connection: Open SQLite connection receiving the classification.
+            gmail_message_row_id: Parent Gmail message row identifier.
+        """
+
+        connection.execute(
+            """
+            INSERT INTO message_classifications (
+                gmail_message_row_id,
+                verdict,
+                score,
+                reasons_json,
+                classifier_version,
+                classified_at
+            )
+            VALUES (?, 'newsletter', 5, ?, 'rules-v1', ?)
+            """,
+            (
+                gmail_message_row_id,
+                '["configured_sender"]',
+                EXTRACTED_AT,
+            ),
+        )
+
     def test_schema_creates_content_table_and_index(
         self,
     ) -> None:
@@ -219,6 +250,10 @@ class MessageContentSchemaTests(unittest.TestCase):
 
             gmail_message_row_id = (
                 self.insert_message(connection)
+            )
+            self.insert_newsletter_classification(
+                connection,
+                gmail_message_row_id,
             )
 
             self.insert_content(
@@ -356,6 +391,10 @@ class MessageContentSchemaTests(unittest.TestCase):
 
             gmail_message_row_id = (
                 self.insert_message(connection)
+            )
+            self.insert_newsletter_classification(
+                connection,
+                gmail_message_row_id,
             )
 
             self.insert_content(

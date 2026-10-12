@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
+from app.backend.bd.db import CURRENT_SCHEMA_VERSION
 from app.config import AppConfig
 from app.tools.logger import (
     DEFAULT_LOG_BACKUP_COUNT,
@@ -122,6 +123,18 @@ class WebLoggingIntegrationTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn(
                 "NewsPulse application initialized successfully",
+                content,
+            )
+            self.assertIn(
+                "Database schema migration started: "
+                "current_version=0 target_version="
+                f"{CURRENT_SCHEMA_VERSION}",
+                content,
+            )
+            self.assertIn(
+                "Database schema migration completed: "
+                "initial_version=0 final_version="
+                f"{CURRENT_SCHEMA_VERSION}",
                 content,
             )
             self.assertIn(

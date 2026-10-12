@@ -45,6 +45,7 @@ def build_gmail_ingestion_service(
     gmail_service: Resource,
     database: Database,
     retention_days: int,
+    ingestion_lease_seconds: int = 900,
 ) -> GmailIngestionService:
     """Build the complete incremental ingestion service.
 
@@ -52,6 +53,7 @@ def build_gmail_ingestion_service(
         gmail_service: Authorized Gmail API discovery resource.
         database: Configured SQLite database shared by all repositories.
         retention_days: Positive lifetime for persisted readable content.
+        ingestion_lease_seconds: Positive lifetime of an ingestion heartbeat.
 
     Returns:
         A fully wired incremental Gmail ingestion service.
@@ -69,7 +71,8 @@ def build_gmail_ingestion_service(
     )
 
     ingestion_store = IngestionStore(
-        database
+        database,
+        lease_seconds=ingestion_lease_seconds,
     )
     source_store = NewsletterSourceStore(
         database
